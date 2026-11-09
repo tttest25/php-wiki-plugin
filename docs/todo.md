@@ -66,7 +66,7 @@ docker exec dokuwiki touch /config/dokuwiki/conf/local.php
 
 ---
 
-## Шаг 2 — Сервисный слой: API-клиент [ ]
+## Шаг 2 — Сервисный слой: API-клиент [x]
 
 **Файлы шага:**
 - `classes/PetarClient.php`
