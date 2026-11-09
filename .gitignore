@@ -1,0 +1,6 @@
+project_bundle.txt
+project_bundle_*.txt
+*.log
+.DS_Store
+.opencode/
+*:Zone.Identifier
