@@ -98,7 +98,7 @@ docker exec dokuwiki php -l /config/dokuwiki/lib/plugins/petar/classes/PetarClie
 
 ---
 
-## Шаг 3 — Серверный контроллер BFF-прокси [ ]
+## Шаг 3 — Серверный контроллер BFF-прокси [x]
 
 **Файлы шага:**
 - `action.php`
