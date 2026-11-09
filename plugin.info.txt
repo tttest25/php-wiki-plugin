@@ -1,0 +1,7 @@
+base petar
+author Petar AI Team
+email support@petar.local
+date 2026-03-30
+name Petar BFF Proxy Plugin
+desc DokuWiki BFF Proxy plugin for petar_app backend service
+url https://github.com/petar/php-wiki-plugin
