@@ -12,15 +12,20 @@
    готовности и текст коммита.
 
 После выполнения шага агент отмечает его в `docs/todo.md`
-(`[ ]` → `[x]`, с хешем коммита) — **внутри того же самого атомарного коммита
+(`[ ]` → `[x]`, с уникальным subject коммита) — **внутри того же самого атомарного коммита
 шага** (никаких отдельных микро-коммитов для документации).
+Пользователь явно согласовал `[x]` + уникальный subject в том же коммите
+вместо невозможного self hash; SHA определяется после фиксации через
+`git log --format='%H %s'`.
 
 ## 1. Сводка контракта (кратко, детали — в docs/)
 
 - **Плагин:** `petar` (strict lowercase). **Backend:** настраиваемый `petar_url`
   (по умолчанию `http://petar_app:8080`).
-- **Структура пакетов:** сервисный слой только в `classes/PetarClient.php`,
-  namespace `dokuwiki\plugin\petar\PetarClient` (автозагрузка DokuWiki);
+- **Структура пакетов:** сервисный слой только в `PetarClient.php` (корень
+  плагина), класс `PetarClient` в namespace `dokuwiki\plugin\petar`
+  (автозагрузка DokuWiki: сегменты namespace → путь от корня плагина 1:1,
+  каталог `classes/` не участвует);
   контроллер в `action.php` (`\dokuwiki\Extension\ActionPlugin`);
   синтаксис в `syntax.php` (`\dokuwiki\Extension\SyntaxPlugin`); фронтенд —
   `script.js` + `style.css`; конфиг — `conf/`; локализация — `lang/`

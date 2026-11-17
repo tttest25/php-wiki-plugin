@@ -4,8 +4,7 @@
 `docs/rules.md`. После шага — `php -l` для каждого PHP-файла шага и отметка
 `[x]` с уникальным subject в том же атомарном коммите; SHA определяется через
 `git log --format='%H %s'`. Пользователь явно согласовал это правило и создание
-пяти коммитов вместо невозможного self hash. На Шаге 5 согласование записано
-только здесь; синхронизация файлов правил входит в следующий Шаг 6.
+пяти коммитов вместо невозможного self hash.
 
 ---
 
@@ -72,7 +71,7 @@ docker exec dokuwiki touch /config/dokuwiki/conf/local.php
 ## Шаг 2 — Сервисный слой: API-клиент [x]
 
 **Файлы шага:**
-- `classes/PetarClient.php`
+- `PetarClient.php`
 - `docs/todo.md` (обновление отметки Шага 2 в тот же коммит)
 
 **Содержание (по `docs/architecture.md` §4):**
@@ -94,7 +93,7 @@ docker exec dokuwiki touch /config/dokuwiki/conf/local.php
 
 **Команда проверки:**
 ```bash
-docker exec dokuwiki php -l /config/dokuwiki/lib/plugins/petar/classes/PetarClient.php
+docker exec dokuwiki php -l /config/dokuwiki/lib/plugins/petar/PetarClient.php
 ```
 
 **Коммит:** `feat: add PetarClient service layer (BFF API client)`
@@ -198,6 +197,18 @@ docker exec dokuwiki touch /config/dokuwiki/conf/local.php
 
 ---
 
+## Шаг 6 — Интеграционные исправления E2E [x]
+
+Выполнен; уникальный subject указан ниже и входит в тот же коммит, SHA — через
+`git log`. Технический промежуточный снимок реконструирован, не является
+точной копией исторического dirty tree. Шаги A/B/C сюда не входят.
+Файлы: перенос classes/PetarClient.php → PetarClient.php, action.php,
+syntax.php, docs/architecture.md, docs/rules.md, docs/todo.md,
+AGENTS.md, .opencode/rules.md. Изменения .gitignore исключены.
+Клиент загружается из корня; контроллер раскрывает data-конверт;
+lexer использует штатную категорию substitution и приоритет 305.
+Коммит: `fix: E2E integration fixes (lexer priority, autoload path, response envelope)`.
+
 ## Журнал выполненных шагов
 
 | Шаг | Коммит | Дата | Примечания |
@@ -208,3 +219,4 @@ docker exec dokuwiki touch /config/dokuwiki/conf/local.php
 | 3   | 1d88a41| 2026-11-10 | `[x]` Серверный контроллер BFF-прокси (`action.php`) |
 | 4   | 29a7998| 2026-11-10 | `[x]` Синтаксический плагин и UI-разметка (`syntax.php`) |
 | 5   | `feat: add frontend submit logic and styles` | — | `[x]` SHA через git log; реконструированный baseline 01 |
+| 6   | `fix: E2E integration fixes (lexer priority, autoload path, response envelope)` | — | `[x]` SHA через git log |

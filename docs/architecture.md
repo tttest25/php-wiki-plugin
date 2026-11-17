@@ -15,7 +15,7 @@
   (`call=plugin_petar`), обрабатываемый современным плагином расширений
   `\dokuwiki\Extension\ActionPlugin`.
 - **Разделение ответственности**: DokuWiki-хуки в `action.php`, сетевая логика —
-  только в сервисном слое `classes/PetarClient.php`.
+  только в сервисном слое `PetarClient.php`.
 - **Расширяемость**: зарезервированные маршруты/методы под будущий
   status/result-поллинг.
 - **Безопасность**: CSRF, ACL `@ai`/`@admin` на уровне контроллера и рендера
@@ -40,7 +40,7 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
   └── формирование JSON-ответа клиенту (+ X-Request-ID в ответ)
   ▼
-classes/PetarClient.php  (namespace dokuwiki\plugin\petar, класс PetarClient)
+PetarClient.php  (namespace dokuwiki\plugin\petar, класс PetarClient)
   │  \dokuwiki\HTTP\DokuHTTPClient (sendRequest), БЕЗ curl_*/file_get_contents
   │  заголовки: X-Request-ID (UUIDv4), X-Wiki-User, X-API-Key (только если api_secret != '')
   │  валидация tool по белому списку: yt-dlp | fabric | echo-test
@@ -80,8 +80,7 @@ backend petar_app (параметризованный URL)
 ├── script.js                  # Клиентская логика: fetch → ajax.php, рендер результата
 ├── style.css                  # Стили формы и контейнера результата
 │
-├── classes/
-│   └── PetarClient.php        # Сервисный слой (namespace dokuwiki\plugin\petar)
+├── PetarClient.php            # Сервисный слой (namespace dokuwiki\plugin\petar)
 │
 ├── conf/
 │   ├── default.php            # Значения по умолчанию (petar_url, api_secret, timeout)
@@ -96,12 +95,13 @@ backend petar_app (параметризованный URL)
         └── lang.php           # UI-строки плагина (RU)
 ```
 
-## 4. Сервисный слой: `classes/PetarClient.php`
+## 4. Сервисный слой: `PetarClient.php`
 
 ### 4.1. Общие положения
 
 - Namespace: `dokuwiki\plugin\petar`, класс: `PetarClient`.
-- Автозагрузка — штатная DokuWiki (PSR-4 по каталогу `classes/` плагина),
+- Автозагрузка — штатная DokuWiki: namespace → путь от корня плагина 1:1,
+  без промежуточного каталога `classes/`,
   без `require`/`include` вручную.
 - Единственный способ HTTP — инкапсулированный `\dokuwiki\HTTP\DokuHTTPClient`
   (метод `sendRequest()`). Запрещены `curl_*`, `file_get_contents()` и любые
@@ -178,7 +178,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 НЕ содержит: HTTP-клиент, curl, бизнес-правила валидации backend-данных,
 разбор ответов `petar_app` (только передача результата `PetarClient` клиенту).
 
-### `classes/PetarClient.php` (сервисный слой)
+### `PetarClient.php` (сервисный слой)
 
 Содержит: всё сетевое взаимодействие, заголовки, белый список `tool`,
 парсинг/валидацию ответов backend, логирование ошибок.

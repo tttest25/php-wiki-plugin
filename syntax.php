@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use dokuwiki\Extension\SyntaxPlugin;
+use dokuwiki\Parsing\ModeRegistry;
 
 if (!defined('DOKU_INC')) die();
 
@@ -17,7 +18,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     public function getType(): string
     {
-        return 'substition';
+        return ModeRegistry::CATEGORY_SUBSTITUTION;
     }
 
     /**
@@ -33,7 +34,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     public function getSort(): int
     {
-        return 321;
+        return 305;
     }
 
     /**

@@ -60,7 +60,17 @@ final class action_plugin_petar extends ActionPlugin
             switch ($action) {
                 case 'readyz':
                     $result = $client->checkReadiness();
-                    $this->sendJson($result, $result['http_status'] ?? 200, $result['request_id'] ?? $requestId);
+                    if (!$result['success']) {
+                        $this->sendJson(
+                            ['success' => false, 'error' => $result['error'] ?? 'Backend unavailable'],
+                            ($result['http_status'] ?? 0) >= 400 ? $result['http_status'] : 503,
+                            $result['request_id'] ?? $requestId
+                        );
+                        return;
+                    }
+                    $payload = $result['data'];
+                    $payload['request_id'] = $result['request_id'] ?? $requestId;
+                    $this->sendJson($payload, 200);
                     break;
 
                 case 'submit':
@@ -74,7 +84,9 @@ final class action_plugin_petar extends ActionPlugin
                     $user = (string)($_SERVER['REMOTE_USER'] ?? '');
 
                     $result = $client->submitInput($tool, $message, $user, $requestId);
-                    $this->sendJson($result, $result['http_status'] ?? 200, $result['request_id'] ?? $requestId);
+                    $payload = $result['data'];
+                    $payload['request_id'] = $result['request_id'] ?? $requestId;
+                    $this->sendJson($payload, $result['http_status'] ?? 201, $payload['request_id']);
                     break;
 
                 case 'status':
