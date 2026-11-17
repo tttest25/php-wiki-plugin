@@ -6,219 +6,124 @@ use dokuwiki\Extension\Event;
 use dokuwiki\plugin\petar\PetarClient;
 use dokuwiki\Logger;
 
-/**
- * BFF Proxy Controller for Petar plugin
- *
- * Handles AJAX requests: plugin_petar
- * Routes: action=readyz|submit|status
- * Security: CSRF (for POST) + ACL (@ai/@admin)
- */
+/** DokuWiki-only BFF entry point. No backend status callback is exposed. */
 final class action_plugin_petar extends ActionPlugin
 {
-    /**
-     * Register AJAX hook
-     *
-     * @param Doku_Event_Handler $controller
-     */
+    private string $requestId = '';
+
     public function register(Doku_Event_Handler $controller): void
     {
         $controller->register_hook('AJAX_CALL_UNKNOWN', 'BEFORE', $this, 'handleAjax');
     }
 
-    /**
-     * Handle AJAX call for plugin_petar
-     *
-     * @param Event $event
-     */
     public function handleAjax(Event $event): void
     {
+        global $INPUT, $USERINFO;
+
         if ($event->data !== 'plugin_petar') {
             return;
         }
-
-        // Stop DokuWiki further processing
         $event->stopPropagation();
         $event->result = '';
+        $this->requestId = $this->getRequestId();
 
-        $action = (string)($_REQUEST['action'] ?? 'readyz');
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-
-        // Security checks: ACL & CSRF
-        if (!$this->checkAcl()) {
+        $user = $INPUT->server->str('REMOTE_USER');
+        $groups = (array)($USERINFO['grps'] ?? []);
+        if ($user === '' || (!in_array('ai', $groups, true) && !in_array('admin', $groups, true))) {
+            $this->fail('Access denied', 403);
             return;
         }
-
-        if ($method === 'POST' && !$this->checkCsrf()) {
+        $method = $INPUT->server->str('REQUEST_METHOD', 'GET');
+        if ($method === 'POST' && !checkSecurityToken()) {
+            $this->fail('Security token mismatch (CSRF)', 403);
             return;
         }
-
-        $requestId = $this->getRequestId();
 
         try {
-            $client = $this->createClient();
-
-            switch ($action) {
-                case 'readyz':
-                    $result = $client->checkReadiness();
-                    if (!$result['success']) {
-                        $this->sendJson(
-                            ['success' => false, 'error' => $result['error'] ?? 'Backend unavailable'],
-                            ($result['http_status'] ?? 0) >= 400 ? $result['http_status'] : 503,
-                            $result['request_id'] ?? $requestId
-                        );
-                        return;
-                    }
-                    $payload = $result['data'];
-                    $payload['request_id'] = $result['request_id'] ?? $requestId;
-                    $this->sendJson($payload, 200);
-                    break;
-
-                case 'submit':
-                    if ($method !== 'POST') {
-                        $this->sendJson(['success' => false, 'error' => 'Method not allowed for submit'], 405, $requestId);
-                        return;
-                    }
-
-                    $tool = (string)($_POST['tool'] ?? '');
-                    $message = (string)($_POST['message'] ?? '');
-                    $user = (string)($_SERVER['REMOTE_USER'] ?? '');
-                    $pattern = array_key_exists('pattern', $_POST) ? $_POST['pattern'] : null;
-                    if ($pattern !== null && !is_string($pattern)) {
-                        throw new InvalidArgumentException('Invalid pattern');
-                    }
-
-                    $result = $client->submitInput($tool, $message, $user, $requestId, $pattern);
-                    $payload = $result['data'];
-                    $payload['request_id'] = $result['request_id'] ?? $requestId;
-                    $this->sendJson($payload, $result['http_status'] ?? 201, $payload['request_id']);
-                    break;
-
-                case 'status':
-                    $id = (string)($_REQUEST['id'] ?? '');
-                    $result = $client->getStatus($id);
-                    $this->sendJson($result, 200, $requestId);
-                    break;
-
-                default:
-                    $this->sendJson(['success' => false, 'error' => 'Unknown action: ' . $action], 404, $requestId);
-                    break;
+            $action = $this->stringParam($INPUT, 'action', 'readyz');
+            if (!in_array($action, ['readyz', 'submit'], true)) {
+                $this->fail('Unknown action', 404);
+                return;
             }
+            $allowedMethod = $action === 'readyz' ? 'GET' : 'POST';
+            if ($method !== $allowedMethod) {
+                header('Allow: ' . $allowedMethod);
+                $this->fail('Method not allowed', 405);
+                return;
+            }
+
+            // Configuration errors are not user-input errors.
+            try {
+                $client = new PetarClient(
+                    (string)$this->getConf('petar_url'),
+                    (string)$this->getConf('api_secret'),
+                    (int)$this->getConf('timeout')
+                );
+            } catch (InvalidArgumentException $e) {
+                $this->fail('Invalid backend configuration', 500);
+                return;
+            }
+
+            if ($action === 'readyz') {
+                $result = $client->checkReadiness($this->requestId);
+                if (!$result['success']) {
+                    $this->sendJson(['status' => 'unavailable', 'error' => 'Backend unavailable'], 503);
+                    return;
+                }
+                $this->sendJson($result['data'], 200);
+                return;
+            }
+
+            $tool = $this->stringParam($INPUT->post, 'tool');
+            $message = $this->stringParam($INPUT->post, 'message');
+            $pattern = $INPUT->post->has('pattern') ? $this->stringParam($INPUT->post, 'pattern') : null;
+            $result = $client->submitInput($tool, $message, $user, $this->requestId, $pattern);
+            $this->sendJson($result['data'], 201);
         } catch (InvalidArgumentException $e) {
-            Logger::error('petar', sprintf('Invalid argument [req_id=%s]: %s', $requestId, $e->getMessage()), __FILE__, __LINE__);
-            $this->sendJson(['success' => false, 'error' => $e->getMessage()], 400, $requestId);
+            $this->fail($e->getMessage(), 400);
         } catch (RuntimeException $e) {
-            Logger::error('petar', sprintf('Runtime error [req_id=%s]: %s', $requestId, $e->getMessage()), __FILE__, __LINE__);
-            $code = $e->getCode() >= 400 && $e->getCode() < 600 ? $e->getCode() : 502;
-            $this->sendJson(['success' => false, 'error' => $e->getMessage()], $code, $requestId);
-        } catch (Exception $e) {
-            Logger::error('petar', sprintf('Unexpected error [req_id=%s]: %s', $requestId, $e->getMessage()), __FILE__, __LINE__);
-            $this->sendJson(['success' => false, 'error' => 'Internal server error'], 500, $requestId);
+            $this->fail('Backend request failed', 502);
+        } catch (Throwable $e) {
+            $this->fail('Internal server error', 500);
         }
     }
 
-    /**
-     * Check ACL: user must be logged in and belong to 'ai' or 'admin' group
-     *
-     * @return bool
-     */
-    private function checkAcl(): bool
+    /** Reject arrays rather than converting them to "Array". */
+    private function stringParam($input, string $name, string $default = ''): string
     {
-        global $USERINFO;
-
-        $user = $_SERVER['REMOTE_USER'] ?? '';
-        if ($user === '') {
-            Logger::error('petar', 'Access denied: unauthenticated request', __FILE__, __LINE__);
-            $this->sendJson(['success' => false, 'error' => 'Access denied: authentication required'], 403);
-            return false;
+        $value = $input->param($name, $default);
+        if (!is_string($value)) {
+            throw new InvalidArgumentException('Invalid field: ' . $name);
         }
-
-        $groups = $USERINFO['grps'] ?? [];
-        if (!is_array($groups)) {
-            $groups = [];
-        }
-
-        // Check if user is in 'ai' or 'admin' group
-        if (!in_array('ai', $groups, true) && !in_array('admin', $groups, true)) {
-            Logger::error('petar', sprintf('Access denied for user "%s": missing "ai" or "admin" group', $user), __FILE__, __LINE__);
-            $this->sendJson(['success' => false, 'error' => 'Access denied: insufficient privileges'], 403);
-            return false;
-        }
-
-        return true;
+        return $value;
     }
 
-    /**
-     * Check CSRF token for POST requests
-     *
-     * @return bool
-     */
-    private function checkCsrf(): bool
-    {
-        if (!checkSecurityToken()) {
-            Logger::error('petar', 'CSRF validation failed (sectok mismatch)', __FILE__, __LINE__);
-            $this->sendJson(['success' => false, 'error' => 'Security token mismatch (CSRF)'], 403);
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * Get or generate request ID
-     *
-     * @return string
-     */
     private function getRequestId(): string
     {
-        $requestId = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_REQUEST['sectok'] ?? '';
-        $requestId = trim($requestId);
-        
-        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $requestId)) {
-            return $requestId;
+        global $INPUT;
+        $value = $INPUT->server->param('HTTP_X_REQUEST_ID', '');
+        if (is_string($value) && preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $value)) {
+            return $value;
         }
-
-        // Generate UUIDv4
         $data = random_bytes(16);
         $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
         $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 
-    /**
-     * Create PetarClient instance using plugin configuration
-     *
-     * @return PetarClient
-     */
-    private function createClient(): PetarClient
+    private function fail(string $message, int $code): void
     {
-        $url = (string)$this->getConf('petar_url');
-        $secret = (string)$this->getConf('api_secret');
-        $timeout = (int)$this->getConf('timeout');
-
-        if ($url === '') {
-            $url = 'http://petar_app:8080';
-        }
-        if ($timeout <= 0) {
-            $timeout = 15;
-        }
-
-        return new PetarClient($url, $secret, $timeout);
+        Logger::error('petar', sprintf('%s [req_id=%s, status=%d]', $message, $this->requestId, $code), __FILE__, __LINE__);
+        $this->sendJson(['success' => false, 'error' => $message], $code);
     }
 
-    /**
-     * Send JSON response and exit
-     *
-     * @param array $data
-     * @param int $httpCode
-     * @param string $requestId
-     */
-    private function sendJson(array $data, int $httpCode = 200, string $requestId = ''): void
+    private function sendJson(array $data, int $httpCode): void
     {
         http_response_code($httpCode);
         header('Content-Type: application/json; charset=utf-8');
-        if ($requestId !== '') {
-            header('X-Request-ID: ' . $requestId);
-        }
-        echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        header('X-Request-ID: ' . $this->requestId);
+        $data['request_id'] = $this->requestId;
+        echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
 }

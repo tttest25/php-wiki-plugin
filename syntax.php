@@ -124,17 +124,14 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     private function checkAcl(): bool
     {
-        global $USERINFO;
+        global $INPUT, $USERINFO;
 
-        $user = $_SERVER['REMOTE_USER'] ?? '';
+        $user = $INPUT->server->str('REMOTE_USER');
         if ($user === '') {
             return false;
         }
 
-        $groups = $USERINFO['grps'] ?? [];
-        if (!is_array($groups)) {
-            $groups = [];
-        }
+        $groups = (array)($USERINFO['grps'] ?? []);
 
         return in_array('ai', $groups, true) || in_array('admin', $groups, true);
     }

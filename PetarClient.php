@@ -58,9 +58,12 @@ final class PetarClient
      *
      * @return array Normalized envelope
      */
-    public function checkReadiness(): array
+    public function checkReadiness(?string $requestId = null): array
     {
-        $requestId = $this->generateUuidV4();
+        $requestId = $requestId ?? $this->generateUuidV4();
+        if (!$this->isValidUuidV4($requestId)) {
+            throw new InvalidArgumentException('Invalid request ID format (UUIDv4 expected)');
+        }
         $url = $this->baseUrl . '/readyz';
 
         $client = new DokuHTTPClient();
@@ -72,7 +75,7 @@ final class PetarClient
         $status = (int)$client->status;
         $body = $client->resp_body;
 
-        if (!$success || $status < 200 || $status >= 300) {
+        if (!$success || $status !== 200) {
             $errorMsg = 'Backend unavailable';
             Logger::error('petar', sprintf('Readiness check failed [req_id=%s, status=%d]', $requestId, $status), __FILE__, __LINE__);
             return [
@@ -85,7 +88,7 @@ final class PetarClient
         }
 
         $data = json_decode($body, true);
-        if (!is_array($data)) {
+        if (!is_array($data) || ($data['status'] ?? null) !== 'ready') {
             $errorMsg = 'Invalid JSON response from backend readiness check';
             Logger::error('petar', sprintf('Readiness parse failed [req_id=%s]: %s', $requestId, $errorMsg), __FILE__, __LINE__);
             return [
@@ -101,7 +104,7 @@ final class PetarClient
             'success' => true,
             'http_status' => $status,
             'request_id' => $requestId,
-            'data' => $data,
+            'data' => ['status' => 'ready'],
             'error' => null,
         ];
     }

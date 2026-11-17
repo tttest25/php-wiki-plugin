@@ -31,11 +31,12 @@ lib/exe/ajax.php (ядро DokuWiki, точка входа единственн�
   │  событие AJAX_CALL_UNKNOWN, параметр call = plugin_petar
   ▼
 action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPlugin)
-  ├── checkSecurityToken()          // CSRF, для всех POST
+   ├── единый UUIDv4 request ID до ACL/CSRF
+   ├── checkSecurityToken()          // CSRF, для всех POST
   ├── ACL: REMOTE_USER + группы @ai/@admin   // 403 Forbidden JSON
   ├── инициализация PetarClient(petar_url, api_secret, timeout) из getConf()
   ├── маршрутизация по параметру action:
-  │     readyz  → PetarClient::checkReadiness()
+   │     readyz  → PetarClient::checkReadiness(requestId?)
    │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
   └── формирование JSON-ответа клиенту (+ X-Request-ID в ответ)
@@ -100,8 +101,9 @@ backend petar_app (параметризованный URL)
 ### 4.1. Общие положения
 
 - Namespace: `dokuwiki\plugin\petar`, класс: `PetarClient`.
-- Автозагрузка — штатная DokuWiki: namespace → путь от корня плагина 1:1,
-  без промежуточного каталога `classes/`,
+- Автозагрузка — штатный автолоадер DokuWiki: сегменты namespace маппятся 1:1
+  в путь от корня плагина (`dokuwiki\plugin\petar\PetarClient` →
+  `lib/plugins/petar/PetarClient.php`; каталог `classes/` НЕ участвует),
   без `require`/`include` вручную.
 - Единственный способ HTTP — инкапсулированный `\dokuwiki\HTTP\DokuHTTPClient`
   (метод `sendRequest()`). Запрещены `curl_*`, `file_get_contents()` и любые
@@ -116,9 +118,10 @@ backend petar_app (параметризованный URL)
 
 Метод формирования заголовков (приватный хелпер):
 
-- `X-Request-ID`: UUIDv4. Если `$requestId` передан в метод — пробрасывается
-  как есть, иначе генерируется (например, через `sprintf`-шаблон
-  `'%04x%04x-...'` и `random_bytes()`).
+- `X-Request-ID`: UUIDv4. Контроллер сохраняет валидный входной ID, иначе
+  генерирует новый через `random_bytes()` до ACL/CSRF. Один ID используется
+  в JSON `request_id`, заголовке ответа и запросе backend; sectok не является ID.
+  Клиент валидирует переданный ID, при отсутствии генерирует новый.
 - `X-Wiki-User`: значение `$INPUT->server->str('REMOTE_USER')`, проброшенное
   из `action.php` (клиент не может его подменить).
 - `X-API-Key`: отправляется **только если** `$apiSecret` не пуст;
@@ -138,8 +141,8 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 | Метод | HTTP backend | Описание |
 |---|---|---|
-| `checkReadiness(): array` | `GET /readyz` | Возвращает декодированный JSON ответа (`{"status":"ready"}` или `{"status":"unavailable","error":...}`) плюс HTTP-код. Клиентская форма использует его для блокировки/разблокировки кнопки отправки. |
-| `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Формирует канонический payload, возвращает конверт success/http_status/request_id/data/error. data содержит UUID input/process и status=new. |
+| `checkReadiness(?string $requestId = null): array` | `GET /readyz` | Успех только при HTTP 200 и объекте с `status=ready`; возвращает нормализованный конверт. BFF отображает неготовность как 503 `status=unavailable`, без сырой ошибки backend. |
+| `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Маппинг канонического payload выполняется только в клиенте. Возвращает конверт `success,http_status,request_id,data,error`; `data` содержит проверенные UUID input/process и `status=new`. |
 | `getStatus(string $id): array` | `GET /api/v1/inputs/{id}` (**ЗАРЕЗЕРВИРОВАНО**) | Заготовка под будущий поллинг статуса/результата по `process_id`/`input_id`. В Шаге 2 реализуется как метод-заглушка (выбрасывает `RuntimeException` или возвращает структуру-заглушку), не экспонируется во фронтенд до отдельного согласования. |
 
 Сигнатуры фиксированы настоящим документом; изменения — только через согласование
@@ -149,14 +152,18 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 `POST /api/v1/inputs`:
 
-- Запрос: source=dokuwiki; payload для echo-test содержит message,
-  для yt-dlp — абсолютный HTTP/HTTPS url, для fabric — text и pattern.
-  BFF сохраняет message и добавляет optional pattern; отсутствующий означает
-  summarize, пустой/нестроковый отклоняется; имя [A-Za-z0-9_-]{1,128}.
-  Текст echo/fabric сохраняется, лишние поля в payload не добавляются.
+- Запрос: `source=dokuwiki`; payload зависит от инструмента:
+  - `echo-test`: `{"tool":"echo-test","message":"<string>"}`
+  - `yt-dlp`: `{"tool":"yt-dlp","url":"https://example.org/video"}`
+  - `fabric`: `{"tool":"fabric","text":"<string>","pattern":"summarize"}`
+  BFF по-прежнему принимает `message`; для fabric добавлено необязательное поле
+  `pattern`, отсутствующее означает `summarize`. Пустое/нестроковое значение
+  отклоняется; имя соответствует `[A-Za-z0-9_-]{1,128}`.
+  Нерелевантные поля не отправляются, текст echo/fabric сохраняется без trim.
+  URL — абсолютный HTTP/HTTPS с host (не гарантия защиты от SSRF).
 - Ответ `201 Created`: `{"input_id":"<uuid>","process_id":"<uuid>","status":"new"}`
-  Принимается только 201 с UUID (включая v7) и status=new.
-  Неверный ответ/транспорт → 502; пользовательский ввод → 400.
+  UUID не ограничены v4 (поддерживается v7). Другой код/неверная структура/сбой
+  транспорта → безопасный 502, ошибка пользовательского ввода → 400.
 
 `GET /readyz`:
 
@@ -170,13 +177,15 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 1. Регистрацию хука `AJAX_CALL_UNKNOWN` (наследуя `\dokuwiki\Extension\ActionPlugin`).
 2. Проверку `call == 'plugin_petar'`.
-3. Маршрутизацию по параметру `action` (`readyz`, `submit`, резерв `status`).
+3. Маршрутизацию по параметру `action` (`readyz` только GET, `submit` только POST,
+   иначе 405 с Allow). `status` и неизвестные действия → 404 без вызова backend.
 4. CSRF: `checkSecurityToken()` для каждого POST → `403` JSON при провале.
 5. ACL: `$INPUT->server->str('REMOTE_USER')` непуст + `$USERINFO['grps']`
    содержит `ai` или `admin` → иначе `403 Forbidden` JSON.
 6. Чтение конфигурации через `$this->getConf(...)` (`petar_url`, `api_secret`,
    `timeout`) и инстанцирование `PetarClient`.
-7. Извлечение/санитизацию входных параметров, передачу их в `PetarClient`.
+7. Извлечение входных параметров через `$INPUT`/`post`/`server`, отклонение
+   массивов вместо приведения к строке, передачу в `PetarClient`.
 8. Формирование JSON-ответа: `Content-Type: application/json`,
    `X-Request-ID` (проброшенный или новый UUIDv4), корректные HTTP-коды
    (200/400/403/502 по результату).

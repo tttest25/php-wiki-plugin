@@ -139,3 +139,14 @@ catch (\RuntimeException $e) { echo json_encode(['rejected'=>true,'code'=>$e->ge
 		t.Fatalf("transport/API key: %#v", got)
 	}
 }
+
+func TestReadinessRejectsMalformedRequestID(t *testing.T) {
+	got := runPHP(t, clientFixture+`
+$c = new \dokuwiki\plugin\petar\PetarClient('http://backend');
+try { $c->checkReadiness("12345678-1234-4234-8234-123456789abc\n"); echo '{"rejected":false}'; }
+catch (\InvalidArgumentException $e) { echo '{"rejected":true}'; }
+}`)
+	if got["rejected"] != true {
+		t.Fatal("request ID with trailing newline accepted")
+	}
+}

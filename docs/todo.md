@@ -212,14 +212,26 @@ lexer использует штатную категорию substitution и п�
 ## Phase 1 — A. Канонический payload [x]
 
 Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
-Реализован только шаг A, B/C ещё впереди.
+Область самого шага A не включает B/C; этот снимок дополнительно содержит B.
 Файлы: PetarClient.php, action.php, tests/contract/client_test.go,
 docs/architecture.md, docs/todo.md.
 Критерии: source=dokuwiki, echo/message, yt-dlp/url, fabric/text/pattern;
 совместимость старого вызова, строгий 201/UUID/status=new, безопасные ошибки.
 Тесты: `GO111MODULE=off go test -count=1 -race ./tests/contract`.
-Readiness с единым ID и новый контроллер остаются шагом B.
+Readiness с единым ID и новый контроллер включены следующим шагом B.
 Коммит: `fix: map plugin tool inputs to canonical payloads`.
+
+## Phase 1 — B. Трассировка и INPUT [x]
+
+Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
+Область шага B не включает C.
+Файлы: PetarClient.php, action.php, syntax.php, tests/contract/client_test.go,
+tests/contract/action_test.go, docs/architecture.md, docs/todo.md.
+Критерии: единый UUIDv4 до ACL/CSRF, INPUT вместо суперглобалов, массивы → 400;
+методы/Allow, status → 404, строгая readiness, безопасный JSON даже при tool=%FF.
+Тесты: `GO111MODULE=off go test -count=1 -race ./tests/contract`.
+UI по-прежнему baseline single-widget, до отдельного шага C.
+Коммит: `fix: enforce BFF request tracing and input validation`.
 
 ## Журнал выполненных шагов
 
@@ -233,3 +245,4 @@ Readiness с единым ID и новый контроллер остаются
 | 5   | `feat: add frontend submit logic and styles` | — | `[x]` SHA через git log; реконструированный baseline 01 |
 | 6   | `fix: E2E integration fixes (lexer priority, autoload path, response envelope)` | — | `[x]` SHA через git log |
 | A   | `fix: map plugin tool inputs to canonical payloads` | — | `[x]` SHA через git log; без B/C |
+| B   | `fix: enforce BFF request tracing and input validation` | — | `[x]` SHA через git log; без C |
