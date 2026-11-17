@@ -254,6 +254,21 @@ go vet, PHP lint, Node syntax check, backend quality gate на petar_test_task07
 версиями исходного dirty tree; ручные доказательства относятся к исходному
 состоянию и сохранены в отчёте.
 
+## Служебный шаг — очистка ignore rules [x]
+
+**Файлы:** `.gitignore`, `tests/contract/gitignore_test.go`, `docs/todo.md`.
+Удалить дубли, ограничить `/go-pet` корнем, явно сохранить
+`.opencode/rules.md`, не игнорировать отслеживаемый `bundle.py`.
+Не удалять файлы из index; сохранить исключения `.env.example` и `.gitkeep`.
+Проверки: тесты через git check-ignore в изолированном репозитории,
+отсутствие дублей, полный контрактный harness/vet и backend quality gate
+на отдельной petar_test_task07. PHP/JS runtime не меняется.
+**Коммит:** `chore: tidy repository ignore rules`.
+Выполнено: регрессионные тесты RED → GREEN, полный harness с race, go vet,
+diff --check и независимый review — PASS; QUALITY GATE PASSED
+(`/tmp/opencode/gitignore-cleanup/quality-gate.log`).
+Отметка и уникальный subject входят в тот же коммит; SHA — через git log.
+
 ## Журнал выполненных шагов
 
 | Шаг | Коммит | Дата | Примечания |

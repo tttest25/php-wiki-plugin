@@ -1,6 +1,35 @@
-project_bundle.txt
-project_bundle_*.txt
+# Временные файлы тестов и профилирования
+*.prof
+cpu.out
+mem.out
+coverage.html
+
+# Локальные конфиги и переменные окружения
+*.env
+*.env.*
+!.env.example
+
+# Локальные данные OpenCode; контракт агента остаётся в Git
+/.opencode/*
+!/.opencode/rules.md
+
+# Логи
 *.log
+
+# Системные и IDE файлы
+.vscode/
+.idea/
 .DS_Store
-.opencode/
+Thumbs.db
 *:Zone.Identifier
+
+# Временные задания
+spool/processing/*
+!spool/processing/.gitkeep
+
+# Служебные файлы выгрузки проекта
+project_bundle*.txt
+bundle_go_pet.txt
+
+# Симлинк на отдельный backend-репозиторий
+/go-pet
