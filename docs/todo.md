@@ -212,7 +212,7 @@ lexer использует штатную категорию substitution и п�
 ## Phase 1 — A. Канонический payload [x]
 
 Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
-Область самого шага A не включает B/C; этот снимок дополнительно содержит B.
+Область самого шага A не включает B/C; итоговый снимок содержит все три шага.
 Файлы: PetarClient.php, action.php, tests/contract/client_test.go,
 docs/architecture.md, docs/todo.md.
 Критерии: source=dokuwiki, echo/message, yt-dlp/url, fabric/text/pattern;
@@ -224,14 +224,35 @@ Readiness с единым ID и новый контроллер включены
 ## Phase 1 — B. Трассировка и INPUT [x]
 
 Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
-Область шага B не включает C.
+Область самого шага B не включает C.
 Файлы: PetarClient.php, action.php, syntax.php, tests/contract/client_test.go,
 tests/contract/action_test.go, docs/architecture.md, docs/todo.md.
 Критерии: единый UUIDv4 до ACL/CSRF, INPUT вместо суперглобалов, массивы → 400;
 методы/Allow, status → 404, строгая readiness, безопасный JSON даже при tool=%FF.
 Тесты: `GO111MODULE=off go test -count=1 -race ./tests/contract`.
-UI по-прежнему baseline single-widget, до отдельного шага C.
+UI включён следующим отдельным шагом C.
 Коммит: `fix: enforce BFF request tracing and input validation`.
+
+## Phase 1 — C. Формы и локализация [x]
+
+Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
+Файлы: syntax.php, script.js, style.css, lang/en/lang.php, lang/ru/lang.php,
+tests/contract/ui_test.go, tests/contract/ui_behavior.js,
+docs/architecture.md, docs/todo.md, docs/phase1-php-acceptance.md.
+Критерии: независимые виджеты, unique id, initial disabled, readiness/retry,
+timeout без автоматического submit retry, pattern и локализованный безопасный вывод.
+Проверки: `GO111MODULE=off go test -count=1 -race ./tests/contract`,
+go vet, PHP lint, Node syntax check, backend quality gate на petar_test_task07.
+Ручная приёмка и реальные E2E, ID и ограничения:
+[итоговый отчёт PHP](phase1-php-acceptance.md).
+Коммит: `fix: make tool forms readiness-aware and independently usable`.
+
+Отметки `[x]` и уникальные subjects входят в соответствующие атомарные коммиты
+по явному согласованию пользователя. SHA проверяются через `git log` после
+фактической фиксации; этот документ не заявляет заранее вычисленных хешей.
+Промежуточные снимки реконструированы, а не являются точными историческими
+версиями исходного dirty tree; ручные доказательства относятся к исходному
+состоянию и сохранены в отчёте.
 
 ## Журнал выполненных шагов
 
@@ -246,3 +267,4 @@ UI по-прежнему baseline single-widget, до отдельного ша�
 | 6   | `fix: E2E integration fixes (lexer priority, autoload path, response envelope)` | — | `[x]` SHA через git log |
 | A   | `fix: map plugin tool inputs to canonical payloads` | — | `[x]` SHA через git log; без B/C |
 | B   | `fix: enforce BFF request tracing and input validation` | — | `[x]` SHA через git log; без C |
+| C   | `fix: make tool forms readiness-aware and independently usable` | — | `[x]` SHA через git log |

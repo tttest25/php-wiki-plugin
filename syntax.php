@@ -18,7 +18,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     public function getType(): string
     {
-        return ModeRegistry::CATEGORY_SUBSTITUTION;
+        return ModeRegistry::CATEGORY_SUBSTITUTION; // = 'substition' — каноническое имя категории ядра
     }
 
     /**
@@ -80,9 +80,21 @@ final class syntax_plugin_petar extends SyntaxPlugin
             return true;
         }
 
+        static $widgetNumber = 0;
+        $id = 'petar-' . ++$widgetNumber;
+        $strings = [];
+        foreach ([
+            'label_message', 'label_url', 'label_text', 'hint_message', 'hint_url',
+            'hint_text', 'status_checking', 'status_ready', 'status_busy',
+            'status_accepted', 'err_backend', 'err_request', 'err_submit_uncertain',
+            'label_status', 'label_input_id', 'label_process_id', 'label_request_id',
+        ] as $key) {
+            $strings[$key] = $this->getLang($key);
+        }
+        $ui = hsc(json_encode($strings, JSON_THROW_ON_ERROR));
         $sectok = hsc(getSecurityToken());
         $labelTool = hsc($this->getLang('label_tool'));
-        $labelMessage = hsc($this->getLang('label_message'));
+        $labelMessage = hsc($this->getLang('label_url'));
         $btnSubmit = hsc($this->getLang('btn_submit'));
 
         $optionsHtml = '';
@@ -91,27 +103,36 @@ final class syntax_plugin_petar extends SyntaxPlugin
             $optionsHtml .= '<option value="' . $safeTool . '">' . $safeTool . '</option>';
         }
 
-        $renderer->doc .= '<div class="plugin_petar">';
-        $renderer->doc .= '<form id="petar-form" method="post" action="">';
+        $renderer->doc .= '<div class="plugin_petar" data-ui="' . $ui . '">';
+        $renderer->doc .= '<form id="' . $id . '-form" method="post" action="">';
         
         $renderer->doc .= '<p class="row">';
-        $renderer->doc .= '<label for="petar-tool">' . $labelTool . '</label>';
-        $renderer->doc .= '<select id="petar-tool" name="tool">' . $optionsHtml . '</select>';
+        $renderer->doc .= '<label for="' . $id . '-tool">' . $labelTool . '</label>';
+        $renderer->doc .= '<select id="' . $id . '-tool" name="tool">' . $optionsHtml . '</select>';
         $renderer->doc .= '</p>';
 
         $renderer->doc .= '<p class="row">';
-        $renderer->doc .= '<label for="petar-message">' . $labelMessage . '</label>';
-        $renderer->doc .= '<textarea id="petar-message" name="message" rows="6" required></textarea>';
+        $renderer->doc .= '<label class="petar-message-label" for="' . $id . '-message">' . $labelMessage . '</label>';
+        $renderer->doc .= '<textarea id="' . $id . '-message" name="message" rows="6" required'
+            . ' aria-describedby="' . $id . '-hint" placeholder="' . hsc($this->getLang('hint_url')) . '"></textarea>';
+        $renderer->doc .= '<small class="petar-hint" id="' . $id . '-hint">' . hsc($this->getLang('hint_url')) . '</small>';
+        $renderer->doc .= '</p>';
+        $renderer->doc .= '<p class="row petar-pattern" hidden>';
+        $renderer->doc .= '<label for="' . $id . '-pattern">' . hsc($this->getLang('label_pattern')) . '</label>';
+        $renderer->doc .= '<input id="' . $id . '-pattern" name="pattern" type="text" value="summarize"'
+            . ' pattern="[A-Za-z0-9_\-]{1,128}" maxlength="128" disabled />';
         $renderer->doc .= '</p>';
 
         $renderer->doc .= '<input type="hidden" name="sectok" value="' . $sectok . '" />';
         
         $renderer->doc .= '<p class="row">';
-        $renderer->doc .= '<button type="submit" class="button">' . $btnSubmit . '</button>';
+        $renderer->doc .= '<button type="submit" class="button" disabled>' . $btnSubmit . '</button>';
+        $renderer->doc .= '<button type="button" class="button petar-retry">' . hsc($this->getLang('btn_retry')) . '</button>';
         $renderer->doc .= '</p>';
 
         $renderer->doc .= '</form>';
-        $renderer->doc .= '<div id="petar-result" class="petar-result" hidden></div>';
+        $renderer->doc .= '<p class="petar-status" role="status" aria-live="polite">' . hsc($this->getLang('status_checking')) . '</p>';
+        $renderer->doc .= '<div id="' . $id . '-result" class="petar-result" role="status" aria-live="polite" hidden></div>';
         $renderer->doc .= '</div>';
 
         return true;

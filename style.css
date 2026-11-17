@@ -29,6 +29,20 @@
     font-size: 0.95em;
 }
 
+.plugin_petar [hidden] {
+    display: none !important;
+}
+
+.plugin_petar .petar-status,
+.plugin_petar .petar-hint {
+    overflow-wrap: anywhere;
+}
+
+.plugin_petar[data-state="unavailable"] .petar-status {
+    color: #b71c1c;
+}
+
+.plugin_petar input[type="text"],
 .plugin_petar select,
 .plugin_petar textarea {
     padding: 0.5em 0.75em;
@@ -41,6 +55,7 @@
     font-family: inherit;
 }
 
+.plugin_petar input[type="text"]:focus,
 .plugin_petar select:focus,
 .plugin_petar textarea:focus {
     outline: none;
