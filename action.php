@@ -82,8 +82,12 @@ final class action_plugin_petar extends ActionPlugin
                     $tool = (string)($_POST['tool'] ?? '');
                     $message = (string)($_POST['message'] ?? '');
                     $user = (string)($_SERVER['REMOTE_USER'] ?? '');
+                    $pattern = array_key_exists('pattern', $_POST) ? $_POST['pattern'] : null;
+                    if ($pattern !== null && !is_string($pattern)) {
+                        throw new InvalidArgumentException('Invalid pattern');
+                    }
 
-                    $result = $client->submitInput($tool, $message, $user, $requestId);
+                    $result = $client->submitInput($tool, $message, $user, $requestId, $pattern);
                     $payload = $result['data'];
                     $payload['request_id'] = $result['request_id'] ?? $requestId;
                     $this->sendJson($payload, $result['http_status'] ?? 201, $payload['request_id']);

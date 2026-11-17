@@ -209,6 +209,18 @@ AGENTS.md, .opencode/rules.md. Изменения .gitignore исключены.
 lexer использует штатную категорию substitution и приоритет 305.
 Коммит: `fix: E2E integration fixes (lexer priority, autoload path, response envelope)`.
 
+## Phase 1 — A. Канонический payload [x]
+
+Выполнен в атомарном коммите с subject ниже; SHA — через `git log`.
+Реализован только шаг A, B/C ещё впереди.
+Файлы: PetarClient.php, action.php, tests/contract/client_test.go,
+docs/architecture.md, docs/todo.md.
+Критерии: source=dokuwiki, echo/message, yt-dlp/url, fabric/text/pattern;
+совместимость старого вызова, строгий 201/UUID/status=new, безопасные ошибки.
+Тесты: `GO111MODULE=off go test -count=1 -race ./tests/contract`.
+Readiness с единым ID и новый контроллер остаются шагом B.
+Коммит: `fix: map plugin tool inputs to canonical payloads`.
+
 ## Журнал выполненных шагов
 
 | Шаг | Коммит | Дата | Примечания |
@@ -220,3 +232,4 @@ lexer использует штатную категорию substitution и п�
 | 4   | 29a7998| 2026-11-10 | `[x]` Синтаксический плагин и UI-разметка (`syntax.php`) |
 | 5   | `feat: add frontend submit logic and styles` | — | `[x]` SHA через git log; реконструированный baseline 01 |
 | 6   | `fix: E2E integration fixes (lexer priority, autoload path, response envelope)` | — | `[x]` SHA через git log |
+| A   | `fix: map plugin tool inputs to canonical payloads` | — | `[x]` SHA через git log; без B/C |

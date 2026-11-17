@@ -36,7 +36,7 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
   ├── инициализация PetarClient(petar_url, api_secret, timeout) из getConf()
   ├── маршрутизация по параметру action:
   │     readyz  → PetarClient::checkReadiness()
-  │     submit  → PetarClient::submitInput(tool, message, user, requestId?)
+   │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
   └── формирование JSON-ответа клиенту (+ X-Request-ID в ответ)
   ▼
@@ -139,7 +139,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 | Метод | HTTP backend | Описание |
 |---|---|---|
 | `checkReadiness(): array` | `GET /readyz` | Возвращает декодированный JSON ответа (`{"status":"ready"}` или `{"status":"unavailable","error":...}`) плюс HTTP-код. Клиентская форма использует его для блокировки/разблокировки кнопки отправки. |
-| `submitInput(string $tool, string $message, string $user, ?string $requestId = null): array` | `POST /api/v1/inputs` | Валидирует `tool`, собирает тело `{"source":"dokuwiki","payload":{"tool":...,"message":...}}`, устанавливает заголовки (`X-Request-ID`, `X-Wiki-User`, опциональный `X-API-Key`). Возвращает `{"input_id","process_id","status","request_id"}` для фронтенда. |
+| `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Формирует канонический payload, возвращает конверт success/http_status/request_id/data/error. data содержит UUID input/process и status=new. |
 | `getStatus(string $id): array` | `GET /api/v1/inputs/{id}` (**ЗАРЕЗЕРВИРОВАНО**) | Заготовка под будущий поллинг статуса/результата по `process_id`/`input_id`. В Шаге 2 реализуется как метод-заглушка (выбрасывает `RuntimeException` или возвращает структуру-заглушку), не экспонируется во фронтенд до отдельного согласования. |
 
 Сигнатуры фиксированы настоящим документом; изменения — только через согласование
@@ -149,8 +149,14 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 `POST /api/v1/inputs`:
 
-- Запрос: `{"source":"dokuwiki","payload":{"tool":"yt-dlp|fabric|echo-test","message":"<string>"}}`
+- Запрос: source=dokuwiki; payload для echo-test содержит message,
+  для yt-dlp — абсолютный HTTP/HTTPS url, для fabric — text и pattern.
+  BFF сохраняет message и добавляет optional pattern; отсутствующий означает
+  summarize, пустой/нестроковый отклоняется; имя [A-Za-z0-9_-]{1,128}.
+  Текст echo/fabric сохраняется, лишние поля в payload не добавляются.
 - Ответ `201 Created`: `{"input_id":"<uuid>","process_id":"<uuid>","status":"new"}`
+  Принимается только 201 с UUID (включая v7) и status=new.
+  Неверный ответ/транспорт → 502; пользовательский ввод → 400.
 
 `GET /readyz`:
 

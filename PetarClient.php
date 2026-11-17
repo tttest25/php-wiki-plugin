@@ -38,7 +38,7 @@ final class PetarClient
         }
 
         $parsed = parse_url($baseUrl);
-        if ($parsed === false || empty($parsed['scheme']) || !in_array($parsed['scheme'], ['http', 'https'], true)) {
+        if ($parsed === false || empty($parsed['host']) || empty($parsed['scheme']) || !in_array($parsed['scheme'], ['http', 'https'], true)) {
             throw new InvalidArgumentException('Invalid Petar base URL scheme');
         }
 
@@ -73,8 +73,8 @@ final class PetarClient
         $body = $client->resp_body;
 
         if (!$success || $status < 200 || $status >= 300) {
-            $errorMsg = $client->error !== '' ? $client->error : "HTTP status {$status}";
-            Logger::error('petar', sprintf('Readiness check failed [req_id=%s, status=%d]: %s', $requestId, $status, $errorMsg), __FILE__, __LINE__);
+            $errorMsg = 'Backend unavailable';
+            Logger::error('petar', sprintf('Readiness check failed [req_id=%s, status=%d]', $requestId, $status), __FILE__, __LINE__);
             return [
                 'success' => false,
                 'http_status' => $status,
@@ -117,15 +117,14 @@ final class PetarClient
      * @throws InvalidArgumentException
      * @throws RuntimeException
      */
-    public function submitInput(string $tool, string $message, string $user, ?string $requestId = null): array
+    public function submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array
     {
         // 1. Strict validation
         if (!in_array($tool, self::ALLOWED_TOOLS, true)) {
-            throw new InvalidArgumentException(sprintf('Disallowed or unknown tool: "%s"', $tool));
+            throw new InvalidArgumentException('Disallowed or unknown tool');
         }
 
-        $message = trim($message);
-        if ($message === '') {
+        if (trim($message) === '') {
             throw new InvalidArgumentException('Input message cannot be empty');
         }
 
@@ -144,13 +143,25 @@ final class PetarClient
         }
 
         // 2. Prepare payload and headers
-        $payloadData = [
-            'source' => 'dokuwiki',
-            'payload' => [
-                'tool' => $tool,
-                'message' => $message,
-            ],
-        ];
+        $payload = ['tool' => $tool];
+        if ($tool === 'yt-dlp') {
+            $urlParts = parse_url($message);
+            if (!filter_var($message, FILTER_VALIDATE_URL) || $urlParts === false ||
+                empty($urlParts['host']) || !in_array(strtolower($urlParts['scheme'] ?? ''), ['http', 'https'], true)) {
+                throw new InvalidArgumentException('An absolute HTTP/HTTPS URL is required');
+            }
+            $payload['url'] = $message;
+        } elseif ($tool === 'fabric') {
+            $pattern = $pattern ?? 'summarize';
+            if (!preg_match('/^[A-Za-z0-9_-]{1,128}$/D', $pattern)) {
+                throw new InvalidArgumentException('Invalid pattern name');
+            }
+            $payload['text'] = $message;
+            $payload['pattern'] = $pattern;
+        } else {
+            $payload['message'] = $message;
+        }
+        $payloadData = ['source' => 'dokuwiki', 'payload' => $payload];
 
         try {
             $jsonBody = json_encode($payloadData, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -176,10 +187,9 @@ final class PetarClient
         $status = (int)$client->status;
         $body = $client->resp_body;
 
-        if (!$success || $status < 200 || $status >= 300) {
-            $errorMsg = $client->error !== '' ? $client->error : "HTTP status {$status}";
-            Logger::error('petar', sprintf('Submit input failed [req_id=%s, user=%s, status=%d]: %s', $requestId, $user, $status, $errorMsg), __FILE__, __LINE__);
-            throw new RuntimeException(sprintf('Backend returned error [status=%d, req_id=%s]: %s', $status, $requestId, $errorMsg), $status > 0 ? $status : 502);
+        if (!$success || $status !== 201) {
+            Logger::error('petar', sprintf('Submit input failed [req_id=%s, status=%d]', $requestId, $status), __FILE__, __LINE__);
+            throw new RuntimeException('Backend request failed', 502);
         }
 
         $data = json_decode($body, true);
@@ -190,7 +200,8 @@ final class PetarClient
         }
 
         // Validate required backend response fields
-        if (empty($data['input_id']) || empty($data['process_id']) || empty($data['status'])) {
+        if (!$this->isValidUuid($data['input_id'] ?? null) ||
+            !$this->isValidUuid($data['process_id'] ?? null) || ($data['status'] ?? null) !== 'new') {
             $errorMsg = 'Missing required fields in backend submit response';
             Logger::error('petar', sprintf('Submit response structure error [req_id=%s]', $requestId), __FILE__, __LINE__);
             throw new RuntimeException(sprintf('Incomplete backend response structure [req_id=%s]', $requestId), 502);
@@ -200,7 +211,7 @@ final class PetarClient
             'success' => true,
             'http_status' => $status,
             'request_id' => $requestId,
-            'data' => $data,
+            'data' => ['input_id' => $data['input_id'], 'process_id' => $data['process_id'], 'status' => 'new'],
             'error' => null,
         ];
     }
@@ -238,6 +249,11 @@ final class PetarClient
      */
     private function isValidUuidV4(string $uuid): bool
     {
-        return (bool)preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $uuid);
+        return (bool)preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $uuid);
+    }
+
+    private function isValidUuid($uuid): bool
+    {
+        return is_string($uuid) && (bool)preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $uuid);
     }
 }
