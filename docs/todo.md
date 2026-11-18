@@ -269,6 +269,19 @@ diff --check и независимый review — PASS; QUALITY GATE PASSED
 (`/tmp/opencode/gitignore-cleanup/quality-gate.log`).
 Отметка и уникальный subject входят в тот же коммит; SHA — через git log.
 
+## Служебный шаг — локальный quality gate плагина [x]
+
+**Файлы:** `scripts/quality-gate.sh`, `tests/contract/quality_gate_test.go`, `docs/todo.md`.
+**Запуск:** `./scripts/quality-gate.sh`. Нужны Git, Bash, Docker, Go с поддержкой
+`-race` и Node.js; контейнер `dokuwiki` должен работать и видеть этот checkout
+по `/config/dokuwiki/lib/plugins/petar` через bind mount.
+**Приёмка:** staged/unstaged `git diff --check`, PHP lint в контейнере,
+`node --check`, `go vet` и полный контрактный набор с `-race`; сбой любой
+проверки даёт ненулевой код. Без Go-бэкенда, его БД или браузера; браузерный
+smoke остаётся отдельной проверкой. PHP-04 и код плагина не меняются.
+**Проверки:** `QUALITY GATE PASSED`; независимое review — PASS; Human Sign-off получен.
+**Коммит:** `chore: add plugin quality gate`.
+
 ## Журнал выполненных шагов
 
 | Шаг | Коммит | Дата | Примечания |
