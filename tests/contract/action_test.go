@@ -309,7 +309,7 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 	} {
 		t.Run(fmt.Sprintf("%s/%s/%s", tc.method, tc.query, tc.data), func(t *testing.T) {
 			// Arguments are separate argv; query is supplied via the shell environment.
-			cmd := exec.Command("docker", "exec", "-e", "query="+tc.query, "dokuwiki", "sh", "-c", script,
+			cmd := exec.Command("docker", "exec", "-e", "query="+tc.query, "--", wikiContainer(), "sh", "-c", script,
 				"fixture", "-X", tc.method, "-H", "X-Request-ID: "+tc.id)
 			if tc.method == "POST" {
 				cmd.Args = append(cmd.Args, "--data", tc.data)

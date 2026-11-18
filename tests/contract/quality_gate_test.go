@@ -20,6 +20,8 @@ func TestQualityGate(t *testing.T) {
 		name, fail, wantLast string
 	}{
 		{"success", "", "go test -count=1 -race -timeout 120s ./tests/contract"},
+		{"isolatedContainer", "", "go test -count=1 -race -timeout 120s ./tests/contract"},
+		{"isolatedWrongCheckout", "mount", "docker inspect"},
 		{"wrongCheckout", "mount", "docker inspect"},
 		{"phpFailure", "docker exec", "docker exec dokuwiki php -l " + plugin + "/nested/file with spaces.php"},
 		{"nodeFailure", "node", "node --check -- nested/fixture.js"},
@@ -29,6 +31,11 @@ func TestQualityGate(t *testing.T) {
 		{"stagedWhitespace", "staged", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			container := "dokuwiki"
+			override := ""
+			if strings.HasPrefix(tc.name, "isolated") {
+				container, override = "php03-fixture", "php03-fixture"
+			}
 			parent := t.TempDir()
 			root := filepath.Join(parent, "checkout")
 			write := func(path string, content []byte, mode os.FileMode) {
@@ -66,11 +73,19 @@ set -eu
 name=${0##*/}
 [ "$PWD" = "$GATE_ROOT" ]
 if [ "$name $1" = "docker inspect" ]; then
-    printf 'docker inspect\n' >> "$GATE_LOG"
+    for target do :; done
+    printf 'docker inspect %s\n' "$target" >> "$GATE_LOG"
     if [ "$GATE_FAIL" = mount ]; then echo 'bind /another/checkout'; else printf 'bind %s\n' "$GATE_ROOT"; fi
     exit 0
 fi
-if [ "$name $1" = "docker exec" ]; then [ "$#" = 5 ]; fi
+if [ "$name $1" = "docker exec" ]; then
+    if [ "$2" = -- ]; then
+        [ "$#" = 6 ]
+        shift
+        set -- exec "$2" "$3" "$4" "$5"
+    fi
+    [ "$#" = 5 ]
+fi
 printf '%s %s\n' "$name" "$*" >> "$GATE_LOG"
 if [ "$name" = go ]; then [ "$GO111MODULE" = off ]; fi
 if [ "$GATE_FAIL" = "$name" ] || [ "$GATE_FAIL" = "$name $1" ]; then exit 42; fi
@@ -83,7 +98,7 @@ if [ "$GATE_FAIL" = "$name" ] || [ "$GATE_FAIL" = "$name $1" ]; then exit 42; fi
 			cmd := exec.Command(gate)
 			cmd.Dir = parent
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "GO111MODULE=on",
-				"GATE_ROOT="+root, "GATE_LOG="+log, "GATE_FAIL="+tc.fail)
+				"GATE_ROOT="+root, "GATE_LOG="+log, "GATE_FAIL="+tc.fail, "PETAR_TEST_WIKI_CONTAINER="+override)
 			out, err := cmd.CombinedOutput()
 			pass := bytes.Contains(out, []byte("QUALITY GATE PASSED"))
 			if (err == nil) != (tc.fail == "") || pass != (tc.fail == "") {
@@ -100,11 +115,15 @@ if [ "$GATE_FAIL" = "$name" ] || [ "$GATE_FAIL" = "$name $1" ]; then exit 42; fi
 				t.Fatal(err)
 			}
 			want := []string{
-				"docker inspect", "docker exec dokuwiki php -l " + plugin + "/nested/file with spaces.php",
+				"docker inspect " + container, "docker exec " + container + " php -l " + plugin + "/nested/file with spaces.php",
 				"node --check -- nested/fixture.js", "go vet ./tests/contract", "go test -count=1 -race -timeout 120s ./tests/contract",
 			}
+			last := tc.wantLast
+			if last == "docker inspect" {
+				last += " " + container
+			}
 			i := 0
-			for i < len(want) && want[i] != tc.wantLast {
+			for i < len(want) && want[i] != last {
 				i++
 			}
 			expected := ""

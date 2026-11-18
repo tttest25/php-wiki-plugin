@@ -13,7 +13,7 @@ const pluginRoot = "/config/dokuwiki/lib/plugins/petar/"
 // Execute production PHP, replacing only the DokuWiki HTTP transport.
 func runPHP(t *testing.T, source string) map[string]interface{} {
 	t.Helper()
-	cmd := exec.Command("docker", "exec", "-i", "dokuwiki", "php")
+	cmd := exec.Command("docker", "exec", "-i", "--", wikiContainer(), "php")
 	cmd.Stdin = strings.NewReader("<?php\n" + source)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

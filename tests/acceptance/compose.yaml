@@ -1,0 +1,54 @@
+services:
+  wiki:
+    image: lscr.io/linuxserver/dokuwiki@sha256:20bcd28540072a01c2364bc0ead5b280427c13b38e3c268b632a6496541d2da0
+    entrypoint: ["/bin/bash", "/custom-cont-init.d/petar-bootstrap", "pre-init"]
+    environment:
+      PUID: "${PETAR_ACCEPTANCE_UID:?set checkout owner UID}"
+      PGID: "${PETAR_ACCEPTANCE_GID:?set checkout owner GID}"
+      PETAR_ACCEPTANCE_PASSWORD: "${PETAR_ACCEPTANCE_PASSWORD:?set fixture password}"
+    volumes:
+      - config:/config
+      - ./bootstrap.sh:/custom-cont-init.d/petar-bootstrap:ro
+      - type: bind
+        source: "${PETAR_ACCEPTANCE_CHECKOUT:?set absolute checkout path}"
+        target: /config/dokuwiki/lib/plugins/petar
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -f /config/petar-bootstrap-ok &&
+          curl -fsS --max-time 2 'http://127.0.0.1/doku.php?id=petar_smoke' | grep -Fq 'id="petar_acceptance_fixture"' &&
+          curl -fsS --max-time 2 'http://127.0.0.1/doku.php?id=petar_smoke&do=login' | grep -Fq 'id="dw__login"'
+      interval: 2s
+      timeout: 5s
+      retries: 25
+    depends_on:
+      fixture:
+        condition: service_healthy
+  fixture:
+    image: node@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a
+    user: node
+    read_only: true
+    command: ["node", "/fixture.js"]
+    volumes:
+      - ./fixture.js:/fixture.js:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r => { if (!r.ok) process.exitCode = 1 })"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+  browser:
+    profiles: ["browser"]
+    build: .
+    environment:
+      CI: "1"
+      PETAR_ACCEPTANCE_PASSWORD: "${PETAR_ACCEPTANCE_PASSWORD:?set fixture password}"
+    shm_size: 256m
+networks:
+  default:
+    internal: true
+volumes:
+  config:

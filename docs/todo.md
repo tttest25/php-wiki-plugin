@@ -310,7 +310,7 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
 
 - [ ] **PHP-02: Отличать отказ от неизвестного исхода.** Подтверждённый backend 400 отображается безопасным отказом, потеря ответа — предупреждением. Приёмка: нет утечки сырых ошибок и автоматического повторного POST при неизвестном исходе. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
 
-- [ ] **PHP-03: Воспроизводимая приёмка плагина и Playwright.** Запускать контрактные тесты и браузерный smoke из чистого checkout в изолированной DokuWiki. Приёмка: воспроизводимый запуск с диагностикой, без Browser MCP, рабочей БД и внешних платных CLI. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
+- [x] **PHP-03: Воспроизводимая приёмка плагина и Playwright.** Из чистого checkout `./scripts/acceptance.sh` проходит полный quality gate и Chromium smoke формы и журнала в одноразовой DokuWiki без рабочей БД и Browser MCP; при сбое — диагностика, ненулевой код и очистка стенда. План: [.opencode/tasks/php_03_playwright_acceptance.md](../.opencode/tasks/php_03_playwright_acceptance.md). Коммит: `test: add isolated DokuWiki Playwright acceptance`.
 
 - [x] **PHP-04: Общий журнал `{{petar>jobs}}`.** Сохранить `{{petar}}` как форму; одна строка журнала — один job. Приёмка: оба макроса работают на одной странице; ai/admin видят общий список с пятью статусами, курсором, «Ещё», «Обновить», пустым состоянием и ошибкой; без ACL данные не выдаются, браузер не обращается к backend напрямую. Использует существующий `GET /api/v1/jobs`, не зависит от T22–T27. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md). Коммит: `feat: add shared petar jobs journal`.
 

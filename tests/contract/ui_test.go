@@ -63,7 +63,7 @@ type uiRender struct {
 
 func renderUI(t *testing.T) ([]byte, map[string]uiRender) {
 	t.Helper()
-	cmd := exec.Command("docker", "exec", "-i", "dokuwiki", "php")
+	cmd := exec.Command("docker", "exec", "-i", "--", wikiContainer(), "php")
 	cmd.Stdin = strings.NewReader(uiPHP)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -138,7 +138,7 @@ foreach (['ai', 'admin', 'anonymous', 'ordinary', 'repeated'] as $role) {
 $out['denial'] = hsc(plugin_load('syntax', 'petar')->getLang('err_forbidden'));
 echo json_encode($out);
 `
-	cmd := exec.Command("docker", "exec", "-i", "dokuwiki", "php")
+	cmd := exec.Command("docker", "exec", "-i", "--", wikiContainer(), "php")
 	cmd.Stdin = strings.NewReader(fixture)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

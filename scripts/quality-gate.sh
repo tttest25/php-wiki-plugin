@@ -3,23 +3,24 @@ set -euo pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 readonly plugin_root=/config/dokuwiki/lib/plugins/petar
+readonly wiki_container=${PETAR_TEST_WIKI_CONTAINER:-dokuwiki}
 
 printf '%s\n' '== Git diff (working tree and index) =='
 git diff --check
 git diff --cached --check
 
-printf '%s\n' '== PHP lint (dokuwiki) =='
+printf '== PHP lint (%s) ==\n' "$wiki_container"
 # Contract tests load PHP from this path, so do not test a different checkout.
 mount=$(docker inspect --type container --format \
-    '{{range .Mounts}}{{if eq .Destination "/config/dokuwiki/lib/plugins/petar"}}{{.Type}} {{.Source}}{{end}}{{end}}' dokuwiki)
+    '{{range .Mounts}}{{if eq .Destination "/config/dokuwiki/lib/plugins/petar"}}{{.Type}} {{.Source}}{{end}}{{end}}' -- "$wiki_container")
 if [[ $mount != 'bind '* ]] || [[ ! ${mount#bind } -ef $PWD ]]; then
-    printf 'dokuwiki must bind-mount this checkout at %s\n' "$plugin_root" >&2
+    printf '%s must bind-mount this checkout at %s\n' "$wiki_container" "$plugin_root" >&2
     exit 1
 fi
 git ls-files -z --cached --others --exclude-standard -- '*.php' |
     while IFS= read -r -d '' file; do
         [[ -f $file ]] || continue
-        docker exec dokuwiki php -l "$plugin_root/$file"
+        docker exec -- "$wiki_container" php -l "$plugin_root/$file"
     done
 
 printf '%s\n' '== JavaScript syntax =='
