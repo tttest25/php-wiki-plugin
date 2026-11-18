@@ -141,8 +141,9 @@
                         ++generation;
                         readiness = 'unavailable';
                     }
-                    showResult(response.status >= 500 ? strings.err_submit_uncertain : strings.err_request,
-                        'error', response.requestId);
+                    var errorKey = response.status >= 500 ? 'err_submit_uncertain' :
+                        response.status === 400 ? 'err_submit_rejected' : 'err_request';
+                    showResult(strings[errorKey], 'error', response.requestId);
                 } else if (!data || data.status !== 'new' ||
                     typeof data.input_id !== 'string' || typeof data.process_id !== 'string') {
                     throw new Error('Invalid submission response');

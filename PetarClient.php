@@ -188,14 +188,18 @@ final class PetarClient
         // 3. Execute request
         $success = $client->sendRequest($url, $jsonBody, 'POST');
         $status = (int)$client->status;
-        $body = $client->resp_body;
+
+        // A direct HTTP 400 is a rejection even if sendRequest reports false.
+        if ($status === 400) {
+            throw new InvalidArgumentException('Input rejected', 400);
+        }
 
         if (!$success || $status !== 201) {
             Logger::error('petar', sprintf('Submit input failed [req_id=%s, status=%d]', $requestId, $status), __FILE__, __LINE__);
             throw new RuntimeException('Backend request failed', 502);
         }
 
-        $data = json_decode($body, true);
+        $data = json_decode($client->resp_body, true);
         if (!is_array($data)) {
             $errorMsg = 'Invalid JSON response from backend submit input';
             Logger::error('petar', sprintf('Submit parse failed [req_id=%s]: %s', $requestId, $errorMsg), __FILE__, __LINE__);

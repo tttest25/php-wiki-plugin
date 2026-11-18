@@ -55,10 +55,12 @@ $INPUT->server = new TestInput([
 $USERINFO = ['grps'=>$case['groups'] ?? ['ai']];
 \dokuwiki\HTTP\DokuHTTPClient::$code = $case['backend_code'] ?? 201;
 \dokuwiki\HTTP\DokuHTTPClient::$body = $case['backend_body'] ?? \dokuwiki\HTTP\DokuHTTPClient::$body;
+\dokuwiki\HTTP\DokuHTTPClient::$ok = $case['backend_ok'] ?? true;
 ob_start();
 register_shutdown_function(function() {
  $body = ob_get_clean();
- echo json_encode(['code'=>http_response_code(),'body'=>json_decode($body,true),'sent'=>\dokuwiki\HTTP\DokuHTTPClient::$sent]);
+ echo json_encode(['code'=>http_response_code(),'body'=>json_decode($body,true),
+     'sent'=>\dokuwiki\HTTP\DokuHTTPClient::$sent,'logs'=>\dokuwiki\Logger::$messages]);
 });
 $event = new \dokuwiki\Extension\Event();
 $event->data = $case['call'] ?? 'plugin_petar';
@@ -223,6 +225,31 @@ func TestBFFBranches(t *testing.T) {
 	}
 }
 
+func TestSubmitOutcomes(t *testing.T) {
+	const private = "PRIVATE_UPSTREAM_BODY"
+	for _, tc := range []struct {
+		name, message    string
+		upstream, status int
+	}{
+		{"rejected", "Input rejected", 400, 400},
+		{"lost_response", "Backend request failed", 0, 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := actionPHP(t, map[string]interface{}{
+				"request_id": directRequestID, "backend_code": tc.upstream, "backend_ok": false,
+				"backend_body": `{"error":"` + private + `"}`,
+			})
+			want := map[string]interface{}{"request_id": directRequestID, "error": tc.message, "success": false}
+			if got["code"] != float64(tc.status) || !reflect.DeepEqual(got["body"], want) {
+				t.Fatalf("want HTTP %d with %#v, got %#v", tc.status, want, got)
+			}
+			if strings.Contains(fmt.Sprint(got["logs"]), private) {
+				t.Fatalf("private upstream body leaked in logs: %#v", got["logs"])
+			}
+		})
+	}
+}
+
 func TestBFFGeneratesRequestID(t *testing.T) {
 	for _, id := range []interface{}{"", "invalid", []string{"invalid"}} {
 		got := actionPHP(t, map[string]interface{}{
@@ -269,6 +296,11 @@ if (isset($_GET['backend_fail'])) {
  \dokuwiki\HTTP\DokuHTTPClient::$code = 500;
  \dokuwiki\HTTP\DokuHTTPClient::$body = '{"error":"SECRET"}';
 }
+if (isset($_GET['backend_reject'])) {
+ \dokuwiki\HTTP\DokuHTTPClient::$code = 400;
+ \dokuwiki\HTTP\DokuHTTPClient::$ok = false;
+ \dokuwiki\HTTP\DokuHTTPClient::$body = '{"error":"SECRET"}';
+}
 (new \action_plugin_petar())->handleAjax(new \dokuwiki\Extension\Event());
 }`
 	encoded := base64.StdEncoding.EncodeToString([]byte(source))
@@ -300,6 +332,7 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 		{"?action=readyz", "GET", "", "invalid", 200},
 		{"?action=readyz&backend_fail=1", "GET", "", "", 503},
 		{"?action=submit&backend_fail=1", "POST", "tool=echo-test&message=hello", "", 502},
+		{"?action=submit&backend_reject=1", "POST", "tool=echo-test&message=hello", directRequestID, 400},
 		{"?action=jobs", "GET", "", "invalid", 200},
 		{"?action=jobs&status[]=failed", "GET", "", "", 400},
 		{"?action=jobs&cursor=", "GET", "", "", 400},

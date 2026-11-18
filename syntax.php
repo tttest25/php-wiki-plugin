@@ -92,7 +92,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
         foreach ([
             'label_message', 'label_url', 'label_text', 'hint_message', 'hint_url',
             'hint_text', 'status_checking', 'status_ready', 'status_busy',
-            'status_accepted', 'err_backend', 'err_request', 'err_submit_uncertain',
+            'status_accepted', 'err_backend', 'err_request', 'err_submit_rejected', 'err_submit_uncertain',
             'label_status', 'label_input_id', 'label_process_id', 'label_request_id',
         ] as $key) {
             $strings[$key] = $this->getLang($key);

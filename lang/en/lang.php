@@ -18,6 +18,7 @@ $lang['btn_retry'] = 'Check readiness again';
 $lang['status_checking'] = 'Checking readiness…';
 $lang['status_accepted'] = 'Job accepted';
 $lang['err_request'] = 'The request failed. Check your input and service readiness.';
+$lang['err_submit_rejected'] = 'Input rejected. Correct your input before submitting again.';
 $lang['err_submit_uncertain'] = 'Submission outcome is unknown. A job may already exist; do not resubmit automatically.';
 $lang['label_status'] = 'Status';
 $lang['label_input_id'] = 'Input ID';

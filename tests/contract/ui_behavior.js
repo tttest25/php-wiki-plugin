@@ -156,6 +156,7 @@ async function run(locale) {
     assert.equal(requests.length, 6, 'no automatic retry');
     assert.equal(timers.size, 0, 'timers cleaned');
     b.retry.fire('click');
+    assert.equal(requests[6].options.method, 'GET', 'manual readiness does not submit');
     await reply(6, 200, {status: 'ready'});
     assert(!b.submit.disabled);
     // Newer readiness takes precedence even when old fetch ignores abort.
@@ -186,6 +187,22 @@ async function run(locale) {
     assert(!a.result.textContent.includes('secret backend'));
     assert.equal(requests.length, 13, 'server error never automatically retries submit');
     assert.equal(timers.size, 0);
+    const postCount = () => requests.filter(r => r.options.method === 'POST').length;
+    const before = postCount(), rejectionIndex = requests.length;
+    const privateMarker = 'PRIVATE_UPSTREAM_BODY';
+    assert(!b.submit.disabled);
+    b.form.fire('submit');
+    assert.equal(postCount(), before + 1, 'exactly one POST for a new submission');
+    await reply(rejectionIndex, 400, {error: privateMarker});
+    const rejectionText = b.result.textContent;
+    assert.notEqual(b.result.querySelector('p').textContent, s.err_request, `${locale}: HTTP 400 needs a distinct rejection`);
+    assert(typeof s.err_submit_rejected === 'string' && s.err_submit_rejected.trim(), `${locale}: missing rejection translation`);
+    assert(rejectionText.includes(s.err_submit_rejected), `${locale}: expected localized rejection`);
+    assert(!rejectionText.includes(privateMarker) && !rejectionText.includes(s.err_submit_uncertain));
+    assert.equal(b.result.dataset.inputId, undefined);
+    assert.equal(b.result.dataset.processId, undefined);
+    assert(!b.submit.disabled, 'the user can correct the input and submit manually');
+    assert.equal(postCount(), before + 1, 'no automatic POST after rejection');
     for (const r of requests) {
         assert(r.url.startsWith('/lib/exe/ajax.php?call=plugin_petar&action='));
         assert(r.options.signal, 'finite timeout signal');

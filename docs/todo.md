@@ -308,7 +308,7 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
 
 - [x] **PHP-01: Прямые запросы BFF без редиректов.** Readiness и submit не переходят по Location; цель не получает запрос, 3xx не становится успехом, прямые 200/201 и политика журнала сохранены. План: [.opencode/tasks/php_01_direct_bff_requests.md](../.opencode/tasks/php_01_direct_bff_requests.md). Коммит: `fix: disable redirects for BFF backend requests`.
 
-- [ ] **PHP-02: Отличать отказ от неизвестного исхода.** Подтверждённый backend 400 отображается безопасным отказом, потеря ответа — предупреждением. Приёмка: нет утечки сырых ошибок и автоматического повторного POST при неизвестном исходе. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
+- [x] **PHP-02: Отличать отказ от неизвестного исхода.** Прямой backend 400 → безопасный отказ ввода; потеря ответа → предупреждение без повторного POST. Приёмка: BFF 400/502 с request ID, RU/EN без сырой ошибки, один POST. План: [.opencode/tasks/php_02_submit_outcomes.md](../.opencode/tasks/php_02_submit_outcomes.md). Коммит: `fix: distinguish rejected and uncertain submissions`.
 
 - [x] **PHP-03: Воспроизводимая приёмка плагина и Playwright.** Из чистого checkout `./scripts/acceptance.sh` проходит полный quality gate и Chromium smoke формы и журнала в одноразовой DokuWiki без рабочей БД и Browser MCP; при сбое — диагностика, ненулевой код и очистка стенда. План: [.opencode/tasks/php_03_playwright_acceptance.md](../.opencode/tasks/php_03_playwright_acceptance.md). Коммит: `test: add isolated DokuWiki Playwright acceptance`.
 

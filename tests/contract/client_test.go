@@ -268,6 +268,11 @@ if ($path === '/api/v1/inputs' && getenv('mode') === 'submit_redirect') {
     echo '{"error":"PRIVATE_UPSTREAM_BODY"}';
     return;
 }
+if ($path === '/api/v1/inputs' && getenv('mode') === 'submit_rejected') {
+    http_response_code(400);
+    echo '{"error":"PRIVATE_UPSTREAM_BODY"}';
+    return;
+}
 if ($path === '/api/v1/inputs' || $path === '/submit-target') {
     http_response_code(201);
     echo '{"input_id":"` + directInputID + `","process_id":"` + directProcessID + `","status":"new"}';
@@ -289,7 +294,7 @@ try {
         ? $client->submitInput('echo-test', 'hello', 'wiki', '` + directRequestID + `')
         : $client->checkReadiness('` + directRequestID + `');
     $out = ['result'=>$result, 'code'=>$result['http_status']];
-} catch (\RuntimeException $e) {
+} catch (\RuntimeException | \InvalidArgumentException $e) {
     $out = ['code'=>$e->getCode(), 'error'=>$e->getMessage()];
 }
 $out['requests'] = file(__DIR__ . '/requests', FILE_IGNORE_NEW_LINES);
@@ -335,6 +340,13 @@ exit 1
 }
 
 func TestDirectBFFRequests(t *testing.T) {
+	t.Run("submit_rejected", func(t *testing.T) {
+		got := runDirectBFF(t, "submit_rejected")
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Result.Success ||
+			got.Code != 400 || got.Error != "Input rejected" {
+			t.Fatalf("direct HTTP 400 must report a safe rejection after exactly one POST: %#v", got)
+		}
+	})
 	t.Run("ready_redirect", func(t *testing.T) {
 		got := runDirectBFF(t, "ready_redirect")
 		if strings.Join(got.Requests, "\n") != "GET /readyz" || got.Result.Success || got.Code != 302 {
