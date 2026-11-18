@@ -223,3 +223,144 @@ catch (\InvalidArgumentException $e) { echo '{"rejected":true}'; }
 		t.Fatal("request ID with trailing newline accepted")
 	}
 }
+
+const (
+	directRequestID = "12345678-1234-4234-8234-123456789abc"
+	directInputID   = "019b2c5d-1234-7000-8000-123456789abc"
+	directProcessID = "019b2c5d-1234-7000-8000-123456789abd"
+)
+
+type directBFFResponse struct {
+	Requests []string
+	Code     int
+	Error    string
+	Result   struct {
+		Success   bool
+		RequestID string `json:"request_id"`
+		Data      struct {
+			Status    string
+			InputID   string `json:"input_id"`
+			ProcessID string `json:"process_id"`
+		}
+	}
+}
+
+func runDirectBFF(t *testing.T, mode string) directBFFResponse {
+	t.Helper()
+	const router = `<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($path === '/health') {
+    echo basename(__DIR__);
+    return;
+}
+file_put_contents(__DIR__ . '/requests', $_SERVER['REQUEST_METHOD'] . " $path\n", FILE_APPEND);
+header('Content-Type: application/json');
+if ($path === '/readyz' && getenv('mode') === 'ready_redirect') {
+    header('Location: /ready-target', true, 302);
+    return;
+}
+if ($path === '/readyz' || $path === '/ready-target') {
+    echo '{"status":"ready"}';
+    return;
+}
+if ($path === '/api/v1/inputs' && getenv('mode') === 'submit_redirect') {
+    header('Location: /submit-target', true, 307);
+    echo '{"error":"PRIVATE_UPSTREAM_BODY"}';
+    return;
+}
+if ($path === '/api/v1/inputs' || $path === '/submit-target') {
+    http_response_code(201);
+    echo '{"input_id":"` + directInputID + `","process_id":"` + directProcessID + `","status":"new"}';
+    return;
+}
+http_response_code(404);
+`
+	const caller = `<?php
+define('NOSESSION', true);
+define('DOKU_INC', '/config/dokuwiki/');
+require DOKU_INC . 'inc/init.php';
+require_once DOKU_INC . 'lib/plugins/petar/PetarClient.php';
+$conf['proxy']['host'] = '';
+$conf['allowdebug'] = false;
+$conf['dontlog'] = 'error';
+$client = new \dokuwiki\plugin\petar\PetarClient($argv[1], '', 2);
+try {
+    $result = str_starts_with(getenv('mode'), 'submit_')
+        ? $client->submitInput('echo-test', 'hello', 'wiki', '` + directRequestID + `')
+        : $client->checkReadiness('` + directRequestID + `');
+    $out = ['result'=>$result, 'code'=>$result['http_status']];
+} catch (\RuntimeException $e) {
+    $out = ['code'=>$e->getCode(), 'error'=>$e->getMessage()];
+}
+$out['requests'] = file(__DIR__ . '/requests', FILE_IGNORE_NEW_LINES);
+echo json_encode($out);
+`
+	script := `set -eu
+dir=$(mktemp -d)
+pid=''
+cleanup() {
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+    rm -rf "$dir"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+printf '%s' "$1" > "$dir/router.php"
+printf '%s' "$2" > "$dir/caller.php"
+port=$(php -r '$s = stream_socket_server("tcp://127.0.0.1:0"); if (!$s) exit(1); echo substr(strrchr(stream_socket_get_name($s, false), ":"), 1);')
+url="http://127.0.0.1:$port"
+php -S "127.0.0.1:$port" "$dir/router.php" >"$dir/server.log" 2>&1 &
+pid=$!
+for i in $(seq 1 20); do
+    if [ "$(curl --noproxy '*' -fsS --max-time 1 "$url/health" 2>/dev/null)" = "$(basename "$dir")" ]; then
+        php "$dir/caller.php" "$url"
+        exit
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.1
+done
+echo 'loopback fixture did not start' >&2
+cat "$dir/server.log" >&2
+exit 1
+`
+	cmd := exec.Command("docker", "exec", "-e", "mode="+mode, "--", wikiContainer(), "sh", "-c", script, "fixture", router, caller)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("loopback fixture: %v\n%s", err, out)
+	}
+	var got directBFFResponse
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("loopback fixture JSON: %v\n%s", err, out)
+	}
+	return got
+}
+
+func TestDirectBFFRequests(t *testing.T) {
+	t.Run("ready_redirect", func(t *testing.T) {
+		got := runDirectBFF(t, "ready_redirect")
+		if strings.Join(got.Requests, "\n") != "GET /readyz" || got.Result.Success || got.Code != 302 {
+			t.Fatalf("redirect must not reach its target or report readiness: %#v", got)
+		}
+	})
+	t.Run("submit_redirect", func(t *testing.T) {
+		got := runDirectBFF(t, "submit_redirect")
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Result.Success ||
+			got.Code != 502 || got.Error != "Backend request failed" {
+			t.Fatalf("redirect must not reach its target or report a successful submit: %#v", got)
+		}
+	})
+	t.Run("ready_direct", func(t *testing.T) {
+		got := runDirectBFF(t, "ready_direct")
+		if strings.Join(got.Requests, "\n") != "GET /readyz" || got.Code != 200 ||
+			!got.Result.Success || got.Result.RequestID != directRequestID || got.Result.Data.Status != "ready" {
+			t.Fatalf("unexpected direct readiness response: %#v", got)
+		}
+	})
+	t.Run("submit_direct", func(t *testing.T) {
+		got := runDirectBFF(t, "submit_direct")
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Code != 201 ||
+			!got.Result.Success || got.Result.RequestID != directRequestID || got.Result.Data.Status != "new" ||
+			got.Result.Data.InputID != directInputID || got.Result.Data.ProcessID != directProcessID {
+			t.Fatalf("unexpected direct submit response: %#v", got)
+		}
+	})
+}

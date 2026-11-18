@@ -68,8 +68,7 @@ final class PetarClient
         }
         $url = $this->baseUrl . '/readyz';
 
-        $client = new DokuHTTPClient();
-        $client->timeout = $this->timeout;
+        $client = $this->newDirectClient();
         $client->headers['Accept'] = 'application/json';
         $client->headers['X-Request-ID'] = $requestId;
 
@@ -176,8 +175,7 @@ final class PetarClient
 
         $url = $this->baseUrl . '/api/v1/inputs';
 
-        $client = new DokuHTTPClient();
-        $client->timeout = $this->timeout;
+        $client = $this->newDirectClient();
         $client->headers['Accept'] = 'application/json';
         $client->headers['Content-Type'] = 'application/json';
         $client->headers['X-Request-ID'] = $requestId;
@@ -242,9 +240,7 @@ final class PetarClient
             throw new InvalidArgumentException('Invalid request ID format (UUIDv4 expected)');
         }
 
-        $client = new DokuHTTPClient();
-        $client->timeout = $this->timeout;
-        $client->max_redirect = 0;
+        $client = $this->newDirectClient();
         $client->debug = false;
         $client->headers['Accept'] = 'application/json';
         $client->headers['X-Request-ID'] = $requestId;
@@ -287,6 +283,14 @@ final class PetarClient
             $nextCursor = $jobs[self::JOB_PAGE_SIZE - 1]['job_id'];
         }
         return ['jobs' => $jobs, 'next_cursor' => $nextCursor];
+    }
+
+    private function newDirectClient(): DokuHTTPClient
+    {
+        $client = new DokuHTTPClient();
+        $client->timeout = $this->timeout;
+        $client->max_redirect = 0;
+        return $client;
     }
 
     private function isJobDate(mixed $value): bool
