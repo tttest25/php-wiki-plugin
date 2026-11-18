@@ -1,6 +1,22 @@
 <?php
 if (!defined('DOKU_INC')) die();
 
+$lang['jobs_title'] = 'Общий журнал заданий';
+$lang['jobs_all'] = 'Все';
+$lang['jobs_pending'] = 'В очереди';
+$lang['jobs_dispatched'] = 'Передано на выполнение';
+$lang['jobs_in_progress'] = 'Выполняется';
+$lang['jobs_completed'] = 'Завершено';
+$lang['jobs_failed'] = 'Ошибка выполнения';
+$lang['jobs_more'] = 'Ещё';
+$lang['jobs_refresh'] = 'Обновить';
+$lang['jobs_loading'] = 'Загрузка заданий…';
+$lang['jobs_empty'] = 'Задания не найдены.';
+$lang['jobs_error'] = 'Не удалось загрузить задания. Попробуйте ещё раз.';
+$lang['jobs_job_id'] = 'ID задания';
+$lang['jobs_created_at'] = 'Создано';
+$lang['jobs_updated_at'] = 'Обновлено';
+
 $lang['btn_submit'] = 'Отправить';
 $lang['err_forbidden'] = 'Доступ запрещен. Требуется авторизация и принадлежность к группе @ai или @admin.';
 $lang['err_backend'] = 'Бэкенд-сервис в настоящее время недоступен.';

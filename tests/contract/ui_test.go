@@ -37,6 +37,8 @@ namespace {
         $plugin = new syntax_plugin_petar();
         $plugin->render('xhtml', $renderer, []);
         $plugin->render('xhtml', $renderer, []);
+        $plugin->render('xhtml', $renderer, ['mode' => 'jobs']);
+        $plugin->render('xhtml', $renderer, ['mode' => 'jobs']);
         $out[$locale] = ['html' => $renderer->doc, 'strings' => $strings,
             'cache' => $renderer->info['cache'], 'tokens' => $tokens];
     }
@@ -46,6 +48,7 @@ namespace {
         $tokens = 0;
         $renderer = new Doku_Renderer();
         $plugin->render('xhtml', $renderer, []);
+        $plugin->render('xhtml', $renderer, ['mode' => 'jobs']);
         $out[$role] = ['html' => $renderer->doc, 'tokens' => $tokens];
     }
     echo json_encode($out);
@@ -103,7 +106,7 @@ func TestUIRenderer(t *testing.T) {
 		}
 	}
 	for _, role := range []string{"anonymous", "ordinary"} {
-		if r := renders[role]; strings.Contains(r.HTML, "<form") || r.Tokens != 0 {
+		if r := renders[role]; strings.Contains(r.HTML, "<form") || strings.Contains(r.HTML, "data-petar-jobs") || r.Tokens != 0 {
 			t.Errorf("%s: denied render exposes form/token", role)
 		}
 	}
@@ -112,13 +115,115 @@ func TestUIRenderer(t *testing.T) {
 	}
 }
 
+func TestSyntaxJobsMode(t *testing.T) {
+	const fixture = `<?php
+define('NOSESSION', true);
+define('DOKU_INC', '/config/dokuwiki/');
+require DOKU_INC . 'inc/init.php';
+$out = [];
+foreach (['ai', 'admin', 'anonymous', 'ordinary', 'repeated'] as $role) {
+    $INPUT->server->set('REMOTE_USER', $role === 'anonymous' ? '' : 'alice');
+    $USERINFO = ['grps' => [match ($role) { 'admin' => 'admin', 'ordinary' => 'user', default => 'ai' }]];
+    $page = "{{petar}}\n\n{{petar>jobs}}\n";
+    if ($role === 'repeated') $page .= "\n{{petar>jobs}}\n\n{{petar>jobsX}}\n";
+    $instructions = p_get_instructions($page);
+    $count = 0;
+    foreach ($instructions as $instruction) {
+        if ($instruction[0] === 'plugin' && $instruction[1][0] === 'petar') $count++;
+    }
+    $info = [];
+    $html = p_render('xhtml', $instructions, $info);
+    $out[$role] = ['instructions' => $count, 'html' => $html, 'cache' => $info['cache'] ?? null];
+}
+$out['denial'] = hsc(plugin_load('syntax', 'petar')->getLang('err_forbidden'));
+echo json_encode($out);
+`
+	cmd := exec.Command("docker", "exec", "-i", "dokuwiki", "php")
+	cmd.Stdin = strings.NewReader(fixture)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("DokuWiki parser fixture: %v\n%s", err, out)
+	}
+	type page struct {
+		Instructions int
+		HTML         string
+		Cache        *bool
+	}
+	var got struct {
+		AI, Admin, Anonymous, Ordinary, Repeated page
+		Denial                                   string
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("DokuWiki parser fixture JSON: %v\n%s", err, out)
+	}
+	formPattern := regexp.MustCompile(`(?s)<form\b[^>]*>.*?</form>`)
+	journalPattern := regexp.MustCompile(`(?s)<section\b[^>]*\sdata-petar-jobs(?:="[^"]*")?(?:\s[^>]*)?>.*?</section>`)
+	for _, tc := range []struct {
+		role string
+		view page
+		jobs int
+	}{
+		{"ai", got.AI, 1}, {"admin", got.Admin, 1}, {"anonymous", got.Anonymous, 0},
+		{"ordinary", got.Ordinary, 0}, {"repeated", got.Repeated, 2},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			view := tc.view
+			wantInstructions := 2
+			if tc.role == "repeated" {
+				wantInstructions = 3
+			}
+			if view.Cache == nil || *view.Cache || view.Instructions != wantInstructions {
+				t.Fatalf("expected no cache and %d instructions, got %d", wantInstructions, view.Instructions)
+			}
+			forms := formPattern.FindAllStringIndex(view.HTML, -1)
+			journals := journalPattern.FindAllStringIndex(view.HTML, -1)
+			if regexp.MustCompile(`<p>\s*<(?:section|div)\b`).MatchString(view.HTML) {
+				t.Fatal("block widget must not be wrapped in a paragraph")
+			}
+			if tc.jobs == 0 {
+				if got.Denial == "" || strings.Count(view.HTML, got.Denial) != 2 ||
+					regexp.MustCompile(`<\s*(form|select|button|input)\b|data-petar-jobs|sectok`).MatchString(view.HTML) {
+					t.Fatalf("expected localized denials without controls or token: %s", view.HTML)
+				}
+				return
+			}
+			if len(forms) != 1 || len(journals) != tc.jobs || strings.Count(view.HTML, `name="sectok"`) != 1 {
+				t.Fatalf("expected one form and %d token-free journals; got %d forms and %d journals", tc.jobs, len(forms), len(journals))
+			}
+			for _, journal := range journals {
+				form := forms[0]
+				if form[0] < journal[1] && journal[0] < form[1] ||
+					strings.Contains(view.HTML[journal[0]:journal[1]], "sectok") {
+					t.Fatal("journal must not contain or overlap the submit form/token")
+				}
+			}
+			ids := map[string]bool{}
+			for _, m := range regexp.MustCompile(`\bid="([^"]+)"`).FindAllStringSubmatch(view.HTML, -1) {
+				if ids[m[1]] {
+					t.Errorf("duplicate id %s", m[1])
+				}
+				ids[m[1]] = true
+			}
+		})
+	}
+}
+
 func TestUIBehavior(t *testing.T) {
+	runUIBehavior(t, "forms")
+}
+
+func TestJobsUIBehavior(t *testing.T) {
+	runUIBehavior(t, "jobs")
+}
+
+func runUIBehavior(t *testing.T, mode string) {
+	t.Helper()
 	out, _ := renderUI(t)
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("node", filepath.Join(root, "tests/contract/ui_behavior.js"), filepath.Join(root, "script.js"))
+	cmd := exec.Command("node", filepath.Join(root, "tests/contract/ui_behavior.js"), filepath.Join(root, "script.js"), mode)
 	cmd.Stdin = strings.NewReader(string(out))
 	if result, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Node behavior: %v\n%s", err, result)

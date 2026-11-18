@@ -80,6 +80,11 @@ async function run(locale) {
         clearTimeout(id) { timers.delete(id); },
         fetch(url, options) {
             return new Promise((resolve, reject) => {
+                if (url.includes('action=jobs')) {
+                    resolve({ok: true, status: 200, headers: {get: () => null},
+                        json: async () => ({jobs: [], next_cursor: null})});
+                    return;
+                }
                 const r = {url, options, resolve, reject}; requests.push(r);
                 if (options.signal) options.signal.addEventListener('abort', () => reject(Object.assign(Error('timeout'), {name: 'AbortError'})));
             });
@@ -187,4 +192,113 @@ async function run(locale) {
         assert.equal(r.options.credentials, 'same-origin');
     }
 }
-(async () => { await run('en'); await run('ru'); console.log('UI behavior passed (EN/RU)'); })().catch(e => { console.error(e); process.exitCode = 1; });
+async function runJobs(locale) {
+    const document = parse(rendered[locale].html), requests = [];
+    document.createElement = tag => new Element(tag);
+    const context = {
+        document, URLSearchParams, AbortController, DOKU_BASE: '/wiki/',
+        setTimeout: () => 1, clearTimeout: () => {},
+        fetch(url, options) {
+            return new Promise((resolve, reject) => requests.push({url, options, resolve, reject}));
+        }
+    };
+    vm.runInNewContext(source, context);
+    document.fire('DOMContentLoaded');
+    const jobs = requests.filter(r => r.url.includes('action=jobs'));
+    assert.equal(jobs.length, 2, 'each journal requests its first page');
+    const parts = w => ({
+        status: w.querySelector('.petar-jobs-status'), filter: w.querySelector('select'),
+        list: w.querySelector('tbody'), more: w.querySelector('.petar-jobs-more'),
+        refresh: w.querySelector('.petar-jobs-refresh')
+    });
+    const [a, b] = document.querySelectorAll('[data-petar-jobs]').map(parts);
+    const s = rendered[locale].strings;
+    const checkURL = (r, status, cursor) => {
+        const expected = '/wiki/lib/exe/ajax.php?call=plugin_petar&action=jobs' +
+            (status ? '&status=' + status : '') + (cursor ? '&cursor=' + cursor : '');
+        assert.equal(r.url, expected);
+        assert.equal(r.options.method, 'GET');
+        assert.equal(r.options.credentials, 'same-origin');
+        assert(!r.options.body);
+    };
+    const row = tool => ({job_id: 'job', process_id: 'process', tool, status: 'completed',
+        created_at: 'created', updated_at: 'updated', payload: 'SECRET_PAYLOAD'});
+    const answer = async (req, rows, cursor = null, code = 200) => {
+        req.resolve({ok: code === 200, status: code, headers: {get: () => null},
+            json: async () => ({jobs: rows, next_cursor: cursor, error: 'SECRET_ERROR'})});
+        await flush();
+    };
+    const cursor = '019b2c5d-1234-7000-8000-000000000001';
+    checkURL(jobs[0]); checkURL(jobs[1]);
+    assert.equal(a.status.textContent, s.jobs_loading);
+    assert(a.more.hidden);
+    const statuses = ['pending', 'dispatched', 'in_progress', 'completed', 'failed'];
+    assert.deepEqual(a.filter.querySelectorAll('option').map(o => [o.value, o.textContent]),
+        [['', s.jobs_all], ...statuses.map(v => [v, s['jobs_' + v]])]);
+    assert.equal(a.more.textContent, s.jobs_more);
+    assert.equal(a.refresh.textContent, s.jobs_refresh);
+    await answer(jobs[0], [row('<img src=x onerror=evil()>')], cursor);
+    await answer(jobs[1], []);
+    assert.equal(b.status.textContent, s.jobs_empty);
+    assert(a.list.textContent.includes('<img src=x onerror=evil()>'));
+    assert(!a.list.querySelector('img'));
+    assert(!a.list.textContent.includes('SECRET'));
+    assert(!a.more.hidden);
+    let count = requests.length;
+    a.more.fire('click'); a.more.fire('click');
+    assert.equal(requests.length, count + 1);
+    assert(a.more.disabled);
+    checkURL(requests.at(-1), '', cursor);
+    await answer(requests.at(-1), [], null, 502);
+    assert.equal(a.status.textContent, s.jobs_error);
+    assert.equal(a.list.children.length, 1);
+    assert(!a.more.hidden && !a.more.disabled);
+    a.more.fire('click');
+    checkURL(requests.at(-1), '', cursor);
+    await answer(requests.at(-1), [row('next tool')], cursor);
+    assert.equal(a.list.children.length, 2);
+    a.more.fire('click');
+    await answer(requests.at(-1), []);
+    assert.equal(a.list.children.length, 2);
+    assert(a.more.hidden);
+    for (const status of statuses) {
+        a.filter.value = status; a.filter.fire('change');
+        checkURL(requests.at(-1), status);
+        assert.equal(a.list.children.length, 0);
+        await answer(requests.at(-1), [row(status)], cursor);
+    }
+    a.more.fire('click');
+    const staleMore = requests.at(-1);
+    checkURL(staleMore, 'failed', cursor);
+    a.refresh.fire('click');
+    const staleRefresh = requests.at(-1);
+    checkURL(staleRefresh, 'failed');
+    a.filter.value = ''; a.filter.fire('change');
+    checkURL(requests.at(-1));
+    const current = requests.at(-1);
+    staleRefresh.reject(Error('stale'));
+    await flush();
+    assert.equal(a.status.textContent, s.jobs_loading);
+    assert(a.more.hidden);
+    await answer(current, [row('fresh')]);
+    await answer(staleMore, [row('stale')], cursor);
+    assert.equal(a.list.children.length, 1);
+    assert(a.list.textContent.includes('fresh') && !a.list.textContent.includes('stale'));
+    assert(a.more.hidden);
+    assert.equal(b.status.textContent, s.jobs_empty, 'other widget untouched');
+    assert.equal(b.list.children.length, 0);
+    assert.equal(requests.filter(r => r.url.includes('action=readyz')).length, 2);
+    for (const role of ['anonymous', 'ordinary']) {
+        const denied = parse(rendered[role].html);
+        assert(!denied.querySelector('[data-petar-jobs]'));
+        count = requests.length;
+        vm.runInNewContext(source, {...context, document: denied});
+        denied.fire('DOMContentLoaded');
+        assert.equal(requests.length, count, 'ACL denial must not fetch');
+    }
+}
+(async () => {
+    const scenario = process.argv[3] === 'jobs' ? runJobs : run;
+    await scenario('en'); await scenario('ru');
+    console.log('UI behavior passed (EN/RU)');
+})().catch(e => { console.error(e); process.exitCode = 1; });

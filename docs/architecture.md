@@ -37,7 +37,8 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
   ├── инициализация PetarClient(petar_url, api_secret, timeout) из getConf()
   ├── маршрутизация по параметру action:
    │     readyz  → PetarClient::checkReadiness(requestId?)
-   │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
+    │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
+   │     jobs    → PetarClient::listJobs(user, status?, cursor?, requestId?)
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
   └── формирование JSON-ответа клиенту (+ X-Request-ID в ответ)
   ▼
@@ -48,7 +49,8 @@ PetarClient.php  (namespace dokuwiki\plugin\petar, класс PetarClient)
   ▼
 backend petar_app (параметризованный URL)
   GET  /readyz          → 200 {"status":"ready"} | 503 {"status":"unavailable","error":"..."}
-  POST /api/v1/inputs   → 201 {"input_id","process_id","status":"new"}
+   POST /api/v1/inputs   → 201 {"input_id","process_id","status":"new"}
+   GET  /api/v1/jobs    → 200 [job, ...]
 ```
 
 Критические правила потока:
@@ -77,7 +79,7 @@ backend petar_app (параметризованный URL)
 │
 ├── plugin.info.txt            # Метаданные плагина (base: petar, строго lowercase)
 ├── action.php                 # Контроллер BFF: AJAX_CALL_UNKNOWN, CSRF, ACL, роутинг
-├── syntax.php                 # Синтаксический плагин: ACL-проверка, {{petar}} тег, рендер формы
+├── syntax.php                 # ACL и рендер формы {{petar}} или журнала {{petar>jobs}}
 ├── script.js                  # Клиентская логика: fetch → ajax.php, рендер результата
 ├── style.css                  # Стили формы и контейнера результата
 │
@@ -143,6 +145,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 |---|---|---|
 | `checkReadiness(?string $requestId = null): array` | `GET /readyz` | Успех только при HTTP 200 и объекте с `status=ready`; возвращает нормализованный конверт. BFF отображает неготовность как 503 `status=unavailable`, без сырой ошибки backend. |
 | `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Маппинг канонического payload выполняется только в клиенте. Возвращает конверт `success,http_status,request_id,data,error`; `data` содержит проверенные UUID input/process и `status=new`. |
+| `listJobs(string $user, ?string $status = null, ?string $cursor = null, ?string $requestId = null): array` | `GET /api/v1/jobs` | Общая страница без фильтра по пользователю. Возвращает `jobs` и `next_cursor`, при сбое — безопасный 502 через контроллер. |
 | `getStatus(string $id): array` | `GET /api/v1/inputs/{id}` (**ЗАРЕЗЕРВИРОВАНО**) | Заготовка под будущий поллинг статуса/результата по `process_id`/`input_id`. В Шаге 2 реализуется как метод-заглушка (выбрасывает `RuntimeException` или возвращает структуру-заглушку), не экспонируется во фронтенд до отдельного согласования. |
 
 Сигнатуры фиксированы настоящим документом; изменения — только через согласование
@@ -169,6 +172,19 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 - `200 OK`: `{"status":"ready"}`; `503`: `{"status":"unavailable","error":"..."}`.
 
+`GET /api/v1/jobs`:
+
+- Только `limit=21` и необязательные `status` (`pending`, `dispatched`,
+  `in_progress`, `completed`, `failed`) и `cursor` (UUID, включая v7).
+  Запрос без тела, переходы по редиректам запрещены.
+- Только HTTP 200 и JSON-массив валидных объектов; `[]` — пустой список.
+  В BFF выдаются строго `job_id` (`id`), `process_id`, `tool` (`tool_name`),
+  `status`, `created_at`, `updated_at`. UUID и даты RFC3339 проверяются.
+- Порядок backend сохраняется, строки не группируются по процессу. При 21-й
+  строке показываются первые 20; исключающий курсор — ID 20-й строки. При 0–20
+  строках `next_cursor: null`. Успешный BFF-ответ добавляет `request_id` и
+  `Cache-Control: no-store`. Пагинация не является снимком обновляемого журнала.
+
 ## 5. Разделение ответственности
 
 ### `action.php` (контроллер)
@@ -177,14 +193,14 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 1. Регистрацию хука `AJAX_CALL_UNKNOWN` (наследуя `\dokuwiki\Extension\ActionPlugin`).
 2. Проверку `call == 'plugin_petar'`.
-3. Маршрутизацию по параметру `action` (`readyz` только GET, `submit` только POST,
+3. Маршрутизацию по параметру `action` (`readyz`/`jobs` только GET, `submit` только POST,
    иначе 405 с Allow). `status` и неизвестные действия → 404 без вызова backend.
 4. CSRF: `checkSecurityToken()` для каждого POST → `403` JSON при провале.
 5. ACL: `$INPUT->server->str('REMOTE_USER')` непуст + `$USERINFO['grps']`
    содержит `ai` или `admin` → иначе `403 Forbidden` JSON.
 6. Чтение конфигурации через `$this->getConf(...)` (`petar_url`, `api_secret`,
    `timeout`) и инстанцирование `PetarClient`.
-7. Извлечение входных параметров через `$INPUT`/`post`/`server`, отклонение
+7. Извлечение входных параметров через `$INPUT`/`get`/`post`/`server`, отклонение
    массивов вместо приведения к строке, передачу в `PetarClient`.
 8. Формирование JSON-ответа: `Content-Type: application/json`,
    `X-Request-ID` (проброшенный или новый UUIDv4), корректные HTTP-коды
@@ -203,14 +219,14 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 Содержит: наследование `\dokuwiki\Extension\SyntaxPlugin`, проверку ACL
 (`REMOTE_USER` + группы `ai`/`admin`) непосредственно перед рендером
 (при отсутствии прав выводится локализованное сообщение об ошибке доступа без формы
-и без `getSecurityToken()`), парсинг синтаксиса `{{petar}}`, рендер формы
-(инлайн HTML + `getSecurityToken()`), и обязательно
-`$renderer->info['cache'] = false;`. Без AJAX- и сетевой логики.
+и без `getSecurityToken()`), парсинг точных макросов `{{petar}}` и `{{petar>jobs}}`,
+рендер формы с `getSecurityToken()` или пустого журнала без токена. В обоих
+режимах, включая отказ ACL, `$renderer->info['cache'] = false;`. Без сетевой логики.
 
 ### `script.js` / `style.css`
 
 `script.js`: `fetch` к `DOKU_BASE + lib/exe/ajax.php` (`call=plugin_petar`,
-`action=readyz|submit`), отправка `sectok`, рендер результата. Полученные
+`action=readyz|submit|jobs`), отправка `sectok` только для submit, рендер результата. Полученные
 `input_id` и `process_id` сохраняются в DOM-атрибуты контейнера результата:
 `data-input-id` и `data-process-id` (под будущий поллинг `status`).
 `style.css`: только стили, без логики.
@@ -222,6 +238,11 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 AbortController. Отмена ожидания не гарантирует отмену создания задания:
 автоматических повторов submit нет. Все UI-строки RU/EN передаются через
 экранированные data-атрибуты; вывод данных через textContent.
+
+Каждый журнал загружает первую страницу без фильтра, затем поддерживает пять
+статусов, «Обновить» и «Ещё». Смена фильтра/обновление сбрасывают курсор;
+«Ещё» дописывает строки. Счётчик поколения на виджет не даёт старому ответу
+изменить текущие строки, курсор или управление.
 
 ## 6. Расширяемость (резервы)
 

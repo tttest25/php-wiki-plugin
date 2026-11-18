@@ -10,7 +10,7 @@
         return base + 'lib/exe/ajax.php?call=plugin_petar&action=' + encodeURIComponent(action);
     }
 
-    async function request(action, body) {
+    async function request(action, body, query) {
         var controller = new AbortController();
         var timer = setTimeout(function () { controller.abort(); }, 15000);
         try {
@@ -24,7 +24,9 @@
                 options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
                 options.body = body.toString();
             }
-            var response = await fetch(apiUrl(action), options);
+            var url = apiUrl(action);
+            if (query && query.toString()) url += '&' + query.toString();
+            var response = await fetch(url, options);
             var data = await response.json();
             return {
                 ok: response.ok, status: response.status, data: data,
@@ -164,7 +166,83 @@
         checkReadiness();
     }
 
+    function initializeJobs(widget) {
+        if (widget.dataset.initialized) return;
+        widget.dataset.initialized = 'true';
+        var strings = JSON.parse(widget.dataset.ui);
+        var filter = widget.querySelector('select');
+        var refresh = widget.querySelector('.petar-jobs-refresh');
+        var more = widget.querySelector('.petar-jobs-more');
+        var table = widget.querySelector('.petar-jobs-table');
+        var rows = widget.querySelector('tbody');
+        var status = widget.querySelector('.petar-jobs-status');
+        var generation = 0;
+        var cursor = null;
+        var busy = false;
+        var rowCount = 0;
+
+        function updateControls() {
+            more.hidden = cursor === null;
+            more.disabled = busy;
+            table.hidden = rowCount === 0;
+            table.setAttribute('aria-busy', busy ? 'true' : 'false');
+        }
+
+        function makeRow(job) {
+            var row = document.createElement('tr');
+            ['job_id', 'process_id', 'tool', 'status', 'created_at', 'updated_at'].forEach(function (key) {
+                var cell = document.createElement('td');
+                cell.textContent = key === 'status' ? strings[job.status] : job[key];
+                row.appendChild(cell);
+            });
+            return row;
+        }
+
+        async function load(append) {
+            if (append && (busy || cursor === null)) return;
+            var current = ++generation;
+            if (!append) {
+                cursor = null;
+                rowCount = 0;
+                rows.textContent = '';
+            }
+            var query = new URLSearchParams();
+            if (filter.value) query.set('status', filter.value);
+            if (cursor !== null) query.set('cursor', cursor);
+            busy = true;
+            status.textContent = strings.loading;
+            updateControls();
+            try {
+                var response = await request('jobs', null, query);
+                if (current !== generation) return;
+                var data = response.data;
+                if (!response.ok || !data || !Array.isArray(data.jobs) ||
+                    (data.next_cursor !== null && typeof data.next_cursor !== 'string')) {
+                    throw new Error('Invalid journal response');
+                }
+                var page = data.jobs.map(makeRow);
+                page.forEach(function (row) { rows.appendChild(row); });
+                rowCount += page.length;
+                cursor = data.next_cursor;
+                status.textContent = rowCount === 0 ? strings.empty : '';
+            } catch (_) {
+                if (current === generation) status.textContent = strings.error;
+            } finally {
+                if (current === generation) {
+                    busy = false;
+                    updateControls();
+                }
+            }
+        }
+
+        filter.addEventListener('change', function () { load(false); });
+        refresh.addEventListener('click', function () { load(false); });
+        more.addEventListener('click', function () { load(true); });
+        load(false);
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('.plugin_petar').forEach(initialize);
+        document.querySelectorAll('[data-petar-jobs]').forEach(initializeJobs);
     });
 })();

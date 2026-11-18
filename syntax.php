@@ -7,7 +7,7 @@ use dokuwiki\Parsing\ModeRegistry;
 if (!defined('DOKU_INC')) die();
 
 /**
- * DokuWiki Syntax Plugin petar: renders the petar submission form for {{petar}}
+ * Renders the submission form ({{petar}}) or jobs journal ({{petar>jobs}}).
  */
 final class syntax_plugin_petar extends SyntaxPlugin
 {
@@ -26,7 +26,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     public function getPType(): string
     {
-        return 'normal';
+        return 'block'; // Both modes emit block-level markup.
     }
 
     /**
@@ -44,6 +44,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
     public function connectTo($mode): void
     {
         $this->Lexer->addSpecialPattern('\{\{petar\}\}', $mode, 'plugin_petar');
+        $this->Lexer->addSpecialPattern('\{\{petar>jobs\}\}', $mode, 'plugin_petar');
     }
 
     /**
@@ -55,7 +56,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
      */
     public function handle($match, $state, $pos, Doku_Handler $handler): array
     {
-        return [];
+        return ['mode' => $match === '{{petar>jobs}}' ? 'jobs' : 'form'];
     }
 
     /**
@@ -82,6 +83,11 @@ final class syntax_plugin_petar extends SyntaxPlugin
 
         static $widgetNumber = 0;
         $id = 'petar-' . ++$widgetNumber;
+        if (($data['mode'] ?? 'form') === 'jobs') {
+            $renderer->doc .= $this->renderJobs($id);
+            return true;
+        }
+
         $strings = [];
         foreach ([
             'label_message', 'label_url', 'label_text', 'hint_message', 'hint_url',
@@ -136,6 +142,31 @@ final class syntax_plugin_petar extends SyntaxPlugin
         $renderer->doc .= '</div>';
 
         return true;
+    }
+
+    private function renderJobs(string $id): string
+    {
+        $strings = [];
+        foreach (['loading', 'empty', 'error', 'pending', 'dispatched', 'in_progress', 'completed', 'failed'] as $key) {
+            $strings[$key] = $this->getLang('jobs_' . $key);
+        }
+        $ui = hsc(json_encode($strings, JSON_THROW_ON_ERROR));
+        $html = '<section id="' . $id . '-jobs" data-petar-jobs="" data-ui="' . $ui . '" aria-labelledby="' . $id . '-title">';
+        $html .= '<h3 id="' . $id . '-title">' . hsc($this->getLang('jobs_title')) . '</h3>';
+        $html .= '<div class="petar-jobs-controls"><label for="' . $id . '-filter">' . hsc($this->getLang('label_status')) . '</label>';
+        $html .= '<select id="' . $id . '-filter"><option value="">' . hsc($this->getLang('jobs_all')) . '</option>';
+        foreach (['pending', 'dispatched', 'in_progress', 'completed', 'failed'] as $status) {
+            $html .= '<option value="' . $status . '">' . hsc($strings[$status]) . '</option>';
+        }
+        $html .= '</select><button type="button" class="button petar-jobs-refresh">' . hsc($this->getLang('jobs_refresh')) . '</button></div>';
+        $html .= '<p class="petar-jobs-status" role="status"></p><div class="petar-jobs-table" hidden>';
+        $html .= '<table><thead><tr>';
+        foreach (['jobs_job_id', 'label_process_id', 'label_tool', 'label_status', 'jobs_created_at', 'jobs_updated_at'] as $key) {
+            $html .= '<th scope="col">' . hsc($this->getLang($key)) . '</th>';
+        }
+        $html .= '</tr></thead><tbody></tbody></table></div>';
+        $html .= '<button type="button" class="button petar-jobs-more" hidden>' . hsc($this->getLang('jobs_more')) . '</button></section>';
+        return $html;
     }
 
     /**

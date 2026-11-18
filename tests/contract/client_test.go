@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -27,14 +28,15 @@ func runPHP(t *testing.T, source string) map[string]interface{} {
 
 const clientFixture = `
 namespace dokuwiki {
-class Logger { public static function error(...$args) {} }
+class Logger { public static $messages = []; public static function error(...$args) { self::$messages[] = $args[1]; } }
 }
 namespace dokuwiki\HTTP {
 class DokuHTTPClient {
-    public $timeout, $status = 201, $resp_body, $error = '', $headers = [];
+    public $timeout, $status = 201, $resp_body, $error = '', $headers = [], $max_redirect = 5, $debug = true;
     public static $code = 201, $body = '{"input_id":"019b2c5d-1234-7000-8000-123456789abc","process_id":"019b2c5d-1234-7000-8000-123456789abd","status":"new"}', $ok = true, $sent;
     public function sendRequest($url, $body, $method) {
-        self::$sent = ['url'=>$url, 'body'=>json_decode($body,true), 'headers'=>$this->headers];
+        self::$sent = ['url'=>$url, 'body'=>json_decode($body,true), 'raw_body'=>$body, 'method'=>$method,
+            'headers'=>$this->headers, 'max_redirect'=>$this->max_redirect, 'debug'=>$this->debug];
         $this->status = self::$code; $this->resp_body = self::$body;
         return self::$ok;
     }
@@ -44,6 +46,77 @@ namespace {
 define('DOKU_INC', '/unused/');
 require '/config/dokuwiki/lib/plugins/petar/PetarClient.php';
 `
+
+func jobsID(i int) string { return fmt.Sprintf("019b2c5d-1234-7000-8000-%012x", i) }
+
+func jobsFixture(n int) []map[string]interface{} {
+	rows := make([]map[string]interface{}, 0, n)
+	for i := n; i > 0; i-- {
+		rows = append(rows, map[string]interface{}{
+			"id": jobsID(i), "process_id": jobsID(500), "tool_name": "<b>tool</b>",
+			"status": "completed", "created_at": "2026-11-18T12:30:00.123456789Z",
+			"updated_at": "2026-11-18T13:35:00+01:00", "payload": "SECRET_PAYLOAD",
+			"priority": 987654, "result_path": "SECRET_PATH", "error_msg": "SECRET_ERR", "extra": "SECRET_EXTRA",
+		})
+	}
+	return rows
+}
+
+func TestJobsClient(t *testing.T) {
+	valid, _ := json.Marshal(jobsFixture(1))
+	for _, tc := range []struct {
+		name, body, secret string
+		code               int
+		ok, success        bool
+	}{
+		{"valid", string(valid), "test-key", 200, true, true},
+		{"empty", "[]", "", 200, true, true},
+		{"object", "{}", "", 200, true, false},
+		{"scalar", "null", "", 200, true, false},
+		{"rowArray", "[[]]", "", 200, true, false},
+		{"partial", strings.TrimSuffix(string(valid), "]") + ",{}]", "", 200, true, false},
+		{"badID", strings.Replace(string(valid), jobsID(1), "wrong", 1), "", 200, true, false},
+		{"badProcess", strings.Replace(string(valid), `"`+jobsID(500)+`"`, `42`, 1), "", 200, true, false},
+		{"badTool", strings.Replace(string(valid), `"\u003cb\u003etool\u003c/b\u003e"`, `""`, 1), "", 200, true, false},
+		{"badStatus", strings.Replace(string(valid), "completed", "unknown", 1), "", 200, true, false},
+		{"badDate", strings.Replace(string(valid), "11-18", "02-30", 1), "", 200, true, false},
+		{"broken", "SECRET_RAW", "", 200, true, false},
+		{"redirect", string(valid), "", 302, true, false},
+		{"httpError", "SECRET_RAW", "", 500, true, false},
+		{"transport", "SECRET_RAW", "", 0, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]interface{}{"body": tc.body, "code": tc.code, "ok": tc.ok, "secret": tc.secret})
+			got := runPHP(t, clientFixture+`
+$a = json_decode(base64_decode('`+base64Fixture(args)+`'), true);
+\dokuwiki\HTTP\DokuHTTPClient::$body = $a['body'];
+\dokuwiki\HTTP\DokuHTTPClient::$code = $a['code'];
+\dokuwiki\HTTP\DokuHTTPClient::$ok = $a['ok'];
+$c = new \dokuwiki\plugin\petar\PetarClient('http://backend', $a['secret']);
+try { $result = $c->listJobs('wiki', 'completed', '`+jobsID(2)+`'); $code = 200; }
+catch (\RuntimeException $e) { $result = $e->getMessage(); $code = $e->getCode(); }
+echo json_encode(['code'=>$code, 'result'=>$result, 'sent'=>\dokuwiki\HTTP\DokuHTTPClient::$sent,
+    'logs'=>\dokuwiki\Logger::$messages]);
+}`)
+			wantCode := float64(502)
+			if tc.success {
+				wantCode = 200
+			}
+			raw, _ := json.Marshal(got)
+			if got["code"] != wantCode || strings.Contains(string(raw), "SECRET") {
+				t.Fatalf("unexpected result or leak: %s", raw)
+			}
+			sent := got["sent"].(map[string]interface{})
+			headers := sent["headers"].(map[string]interface{})
+			if sent["url"] != "http://backend/api/v1/jobs?limit=21&status=completed&cursor="+jobsID(2) ||
+				sent["raw_body"] != "" || sent["method"] != "GET" || sent["max_redirect"] != float64(0) || sent["debug"] != false ||
+				headers["X-Wiki-User"] != "wiki" || (tc.secret == "" && headers["X-API-Key"] != nil) ||
+				(tc.secret != "" && headers["X-API-Key"] != tc.secret) {
+				t.Fatalf("unexpected upstream request: %#v", sent)
+			}
+		})
+	}
+}
 
 func TestCanonicalPayload(t *testing.T) {
 	for _, tc := range []struct{ tool, message, pattern, want string }{

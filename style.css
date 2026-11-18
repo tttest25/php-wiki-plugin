@@ -136,3 +136,27 @@
     font-size: 0.85em;
     opacity: 0.8;
 }
+
+[data-petar-jobs] {
+    margin: 1.5em 0;
+}
+
+.petar-jobs-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5em;
+}
+
+.petar-jobs-table {
+    overflow-x: auto;
+    margin-bottom: 0.75em;
+}
+
+.petar-jobs-table td {
+    overflow-wrap: anywhere;
+}
+
+[data-petar-jobs] [hidden] {
+    display: none !important;
+}

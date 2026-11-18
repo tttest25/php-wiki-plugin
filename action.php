@@ -41,11 +41,11 @@ final class action_plugin_petar extends ActionPlugin
 
         try {
             $action = $this->stringParam($INPUT, 'action', 'readyz');
-            if (!in_array($action, ['readyz', 'submit'], true)) {
+            if (!in_array($action, ['readyz', 'submit', 'jobs'], true)) {
                 $this->fail('Unknown action', 404);
                 return;
             }
-            $allowedMethod = $action === 'readyz' ? 'GET' : 'POST';
+            $allowedMethod = $action === 'submit' ? 'POST' : 'GET';
             if ($method !== $allowedMethod) {
                 header('Allow: ' . $allowedMethod);
                 $this->fail('Method not allowed', 405);
@@ -71,6 +71,15 @@ final class action_plugin_petar extends ActionPlugin
                     return;
                 }
                 $this->sendJson($result['data'], 200);
+                return;
+            }
+
+            if ($action === 'jobs') {
+                $status = $INPUT->get->has('status') ? $this->stringParam($INPUT->get, 'status') : null;
+                $cursor = $INPUT->get->has('cursor') ? $this->stringParam($INPUT->get, 'cursor') : null;
+                $page = $client->listJobs($user, $status, $cursor, $this->requestId);
+                header('Cache-Control: no-store');
+                $this->sendJson($page, 200);
                 return;
             }
 

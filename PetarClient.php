@@ -17,6 +17,8 @@ use RuntimeException;
 final class PetarClient
 {
     private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
+    private const JOB_STATUSES = ['pending', 'dispatched', 'in_progress', 'completed', 'failed'];
+    private const JOB_PAGE_SIZE = 20;
 
     private string $baseUrl;
     private string $apiSecret;
@@ -217,6 +219,87 @@ final class PetarClient
             'data' => ['input_id' => $data['input_id'], 'process_id' => $data['process_id'], 'status' => 'new'],
             'error' => null,
         ];
+    }
+
+    /** Read a shared page; the wiki user is for tracing, not filtering. */
+    public function listJobs(string $user, ?string $status = null, ?string $cursor = null, ?string $requestId = null): array
+    {
+        $query = ['limit' => self::JOB_PAGE_SIZE + 1];
+        if ($status !== null) {
+            if (!in_array($status, self::JOB_STATUSES, true)) {
+                throw new InvalidArgumentException('Invalid field: status');
+            }
+            $query['status'] = $status;
+        }
+        if ($cursor !== null) {
+            if (!$this->isValidUuid($cursor)) {
+                throw new InvalidArgumentException('Invalid field: cursor');
+            }
+            $query['cursor'] = $cursor;
+        }
+        $requestId ??= $this->generateUuidV4();
+        if (!$this->isValidUuidV4($requestId)) {
+            throw new InvalidArgumentException('Invalid request ID format (UUIDv4 expected)');
+        }
+
+        $client = new DokuHTTPClient();
+        $client->timeout = $this->timeout;
+        $client->max_redirect = 0;
+        $client->debug = false;
+        $client->headers['Accept'] = 'application/json';
+        $client->headers['X-Request-ID'] = $requestId;
+        $client->headers['X-Wiki-User'] = str_replace(["\r", "\n"], '', $user);
+        if ($this->apiSecret !== '') {
+            $client->headers['X-API-Key'] = $this->apiSecret;
+        }
+        $url = $this->baseUrl . '/api/v1/jobs?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        if (!$client->sendRequest($url, '', 'GET') || (int)$client->status !== 200) {
+            $this->failJobs($requestId);
+        }
+
+        // Preserve JSON object/array types, including for empty containers.
+        $rows = json_decode($client->resp_body);
+        if (!is_array($rows) || count($rows) > self::JOB_PAGE_SIZE + 1) {
+            $this->failJobs($requestId);
+        }
+        $jobs = [];
+        foreach ($rows as $row) {
+            if (!$row instanceof \stdClass ||
+                !$this->isValidUuid($row->id ?? null) || !$this->isValidUuid($row->process_id ?? null) ||
+                !is_string($row->tool_name ?? null) || trim($row->tool_name) === '' ||
+                !in_array($row->status ?? null, self::JOB_STATUSES, true) ||
+                !$this->isJobDate($row->created_at ?? null) || !$this->isJobDate($row->updated_at ?? null)) {
+                $this->failJobs($requestId);
+            }
+            $jobs[] = [
+                'job_id' => $row->id,
+                'process_id' => $row->process_id,
+                'tool' => $row->tool_name,
+                'status' => $row->status,
+                'created_at' => $row->created_at,
+                'updated_at' => $row->updated_at,
+            ];
+        }
+
+        $nextCursor = null;
+        if (count($jobs) > self::JOB_PAGE_SIZE) {
+            array_pop($jobs);
+            $nextCursor = $jobs[self::JOB_PAGE_SIZE - 1]['job_id'];
+        }
+        return ['jobs' => $jobs, 'next_cursor' => $nextCursor];
+    }
+
+    private function isJobDate(mixed $value): bool
+    {
+        return is_string($value) &&
+            preg_match('/\A(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z/i', $value, $parts) &&
+            checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1]);
+    }
+
+    private function failJobs(string $requestId): never
+    {
+        Logger::error('petar', 'Jobs request failed [req_id=' . $requestId . ']', __FILE__, __LINE__);
+        throw new RuntimeException('Backend request failed', 502);
     }
 
     /**
