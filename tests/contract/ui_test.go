@@ -101,6 +101,9 @@ func TestUIRenderer(t *testing.T) {
 		if !strings.Contains(r.HTML, `name="pattern"`) {
 			t.Errorf("%s: missing pattern", locale)
 		}
+		if len(regexp.MustCompile(`<select[^>]*name="tool" disabled></select>`).FindAllString(r.HTML, -1)) != 2 {
+			t.Errorf("%s: action choices must start empty and disabled", locale)
+		}
 		if !strings.Contains(r.HTML, `token&quot;&lt;&amp;`) {
 			t.Errorf("unsafe token")
 		}

@@ -3,7 +3,7 @@
 const { test, expect } = require('@playwright/test');
 
 test('ai sees ready form, journal and selected job results on one page', async ({ page, baseURL }) => {
-    const ajax = { readyz: [], jobs: [], job_result: [] };
+    const ajax = { readyz: [], actions: [], submit: [], jobs: [], job_result: [] };
     const resultRequests = [];
     const issues = [];
     page.on('request', request => {
@@ -16,6 +16,8 @@ test('ai sees ready form, journal and selected job results on one page', async (
         if (url.origin === baseURL && url.pathname === '/lib/exe/ajax.php' &&
             url.searchParams.get('call') === 'plugin_petar' && Object.hasOwn(ajax, action)) {
             ajax[action].push(`${response.request().method()} ${response.status()}`);
+            // The exact sequence and the public rejection message are asserted below.
+            if (action === 'submit' && response.request().method() === 'POST' && response.status() === 400) return;
             if (action === 'job_result') {
                 resultRequests.push({ query: [...url.searchParams.keys()], job: url.searchParams.get('job_id'),
                     cache: response.headers()['cache-control'], id: response.headers()['x-request-id'] });
@@ -30,9 +32,13 @@ test('ai sees ready form, journal and selected job results on one page', async (
     page.on('console', message => {
         if (message.type() !== 'error') return;
         const url = new URL(message.location().url || baseURL);
-        // Chromium logs expected HTTP 409 asset errors; verify the exact response trace below.
-        if (url.pathname === '/lib/exe/ajax.php' && url.searchParams.get('action') === 'job_result' &&
+        // Chromium logs expected HTTP errors; verify the exact response trace below.
+        const ajaxError = url.origin === baseURL && url.pathname === '/lib/exe/ajax.php' &&
+            url.searchParams.get('call') === 'plugin_petar';
+        if (ajaxError && url.searchParams.get('action') === 'job_result' &&
             message.text().includes('409')) return;
+        if (ajaxError && url.searchParams.get('action') === 'submit' &&
+            message.text().includes('400')) return;
         issues.push('console error');
     });
 
@@ -61,11 +67,32 @@ test('ai sees ready form, journal and selected job results on one page', async (
         await expect(submit).toBeVisible();
         await expect(submit).toBeEnabled();
 
-        for (const action of ['readyz', 'jobs']) {
+        for (const action of ['readyz', 'actions', 'jobs']) {
             await expect.poll(() => ajax[action], { message: `wiki AJAX ${action}` }).toEqual(['GET 200']);
         }
         const rows = journal.locator('tbody tr');
         const [first, second, failed, processId] = [1, 2, 3, 9].map(n => `019b2c5d-1234-7000-8000-00000000000${n}`);
+        const choices = form.locator('select');
+        const dataField = form.locator('textarea');
+        const submitResult = page.locator('.petar-result');
+        await choices.selectOption({ label: 'Echo test (echo-test v1)' });
+        await dataField.fill('  <tag> & "quote"  ');
+        await submit.click();
+        await expect(submitResult).toHaveAttribute('data-input-id', first);
+        await choices.selectOption({ label: 'Fixture v2 (fixture-action v2)' });
+        await dataField.fill('{');
+        await submit.click();
+        await expect(submitResult).toContainText('Enter valid JSON');
+        expect(ajax.submit).toEqual(['POST 201']);
+        await dataField.fill('{"n":9007199254740993}');
+        await submit.click();
+        await expect(submitResult).toHaveAttribute('data-input-id', second);
+        await dataField.fill('[]');
+        await submit.click();
+        await expect(submitResult).not.toHaveAttribute('data-input-id', second);
+        await expect.poll(() => ajax.submit).toEqual(['POST 201', 'POST 201', 'POST 400']);
+        await expect(submitResult).toContainText(/rejected/i);
+        await expect(submitResult).not.toContainText('PRIVATE_FIXTURE_DIAGNOSTIC');
         await expect(rows, 'three seeded jobs').toHaveCount(3);
         await expect(rows.first()).toBeVisible();
         await expect(rows.first().locator('td'), 'seeded job fields').toHaveText([

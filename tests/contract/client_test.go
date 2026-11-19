@@ -119,33 +119,20 @@ echo json_encode(['code'=>$code, 'result'=>$result, 'sent'=>\dokuwiki\HTTP\DokuH
 	}
 }
 
-func TestCanonicalPayload(t *testing.T) {
-	for _, tc := range []struct{ tool, message, pattern, want string }{
-		{"echo-test", " hello\n", "", `{"tool":"echo-test","message":" hello\n"}`},
-		{"yt-dlp", "https://example.org/video", "", `{"tool":"yt-dlp","url":"https://example.org/video"}`},
-		{"fabric", " text\n", "", `{"tool":"fabric","text":" text\n","pattern":"summarize"}`},
-		{"fabric", "text", "extract_wisdom", `{"tool":"fabric","text":"text","pattern":"extract_wisdom"}`},
+func TestUniversalPayload(t *testing.T) {
+	for _, data := range []string{
+		`{"message":" hello\n"}`, `{"url":"https://example.org/video"}`,
+		`{"text":" text\n","pattern":"summarize"}`, `[]`, `{}`, `null`, `"hello"`,
 	} {
-		t.Run(tc.tool+tc.pattern, func(t *testing.T) {
-			args, _ := json.Marshal([]string{tc.tool, tc.message, "wiki", "12345678-1234-4234-8234-123456789abc"})
-			extra := ""
-			if tc.pattern != "" {
-				pattern, _ := json.Marshal(tc.pattern)
-				extra = "$args[] = " + string(pattern) + ";"
-			}
+		t.Run(data, func(t *testing.T) {
 			got := runPHP(t, clientFixture+`
-$args = json_decode('`+string(args)+`', true); `+extra+`
 $c = new \dokuwiki\plugin\petar\PetarClient('http://backend');
-$result = $c->submitInput(...$args);
+$c->submitAction('fixture', 1, base64_decode('`+base64Fixture([]byte(data))+`'), 'wiki', '`+directRequestID+`');
 echo json_encode(\dokuwiki\HTTP\DokuHTTPClient::$sent);
 }`)
-			payload := got["body"].(map[string]interface{})["payload"]
-			actual, _ := json.Marshal(payload)
-			var want interface{}
-			json.Unmarshal([]byte(tc.want), &want)
-			expected, _ := json.Marshal(want)
-			if string(actual) != string(expected) {
-				t.Fatalf("payload %s, want %s", actual, expected)
+			want := `{"action":"fixture","version":1,"data":` + data + `}`
+			if got["raw_body"] != want {
+				t.Fatalf("payload %v, want %s", got["raw_body"], want)
 			}
 			headers := got["headers"].(map[string]interface{})
 			if _, ok := headers["X-API-Key"]; ok {
@@ -157,14 +144,14 @@ echo json_encode(\dokuwiki\HTTP\DokuHTTPClient::$sent);
 
 func TestClientRejectsInvalidInput(t *testing.T) {
 	for _, args := range []string{
-		`["unknown","text","wiki"]`, `["echo-test"," \n","wiki"]`,
-		`["yt-dlp","ftp://example.org","wiki"]`, `["yt-dlp","https:///path","wiki"]`,
-		`["fabric","text","wiki",null,""]`, `["fabric","text","wiki",null,"../bad"]`,
+		`[" ",1,"{}","wiki"]`, `["echo-test",1,"","wiki"]`,
+		`["new",0,"null","wiki"]`, `["new",1,"{}{}","wiki"]`,
+		`["new",1,"{}",""]`, `["new",1,"{}","wiki","bad-id"]`,
 	} {
 		t.Run(args, func(t *testing.T) {
 			got := runPHP(t, clientFixture+`
 $c = new \dokuwiki\plugin\petar\PetarClient('http://backend');
-try { $c->submitInput(...json_decode('`+args+`',true)); echo '{"rejected":false}'; }
+try { $c->submitAction(...json_decode('`+args+`',true)); echo '{"rejected":false}'; }
 catch (\InvalidArgumentException $e) { echo '{"rejected":true}'; }
 }`)
 			if got["rejected"] != true {
@@ -188,7 +175,7 @@ func TestClientRejectsInvalidResponses(t *testing.T) {
 \dokuwiki\HTTP\DokuHTTPClient::$code = `+tc.code+`;
 \dokuwiki\HTTP\DokuHTTPClient::$body = `+string(body)+`;
 $c = new \dokuwiki\plugin\petar\PetarClient('http://backend');
-try { $c->submitInput('echo-test','hello','wiki'); echo '{"rejected":false}'; }
+try { $c->submitAction('echo-test',1,'{}','wiki'); echo '{"rejected":false}'; }
 catch (\RuntimeException $e) { echo json_encode(['rejected'=>true,'code'=>$e->getCode(),'error'=>$e->getMessage()]); }
 }`)
 			if got["rejected"] != true || got["code"] != float64(502) || strings.Contains(got["error"].(string), "SECRET") {
@@ -201,11 +188,11 @@ catch (\RuntimeException $e) { echo json_encode(['rejected'=>true,'code'=>$e->ge
 func TestClientTransportAndSecret(t *testing.T) {
 	got := runPHP(t, clientFixture+`
 $c = new \dokuwiki\plugin\petar\PetarClient('http://backend', 'test-key');
-$c->submitInput('echo-test', 'hello', 'wiki');
+$c->submitAction('echo-test', 1, '{}', 'wiki');
 $headers = \dokuwiki\HTTP\DokuHTTPClient::$sent['headers'];
 \dokuwiki\HTTP\DokuHTTPClient::$ok = false;
 \dokuwiki\HTTP\DokuHTTPClient::$code = 0;
-try { $c->submitInput('echo-test', 'hello', 'wiki'); echo '{"rejected":false}'; }
+try { $c->submitAction('echo-test', 1, '{}', 'wiki'); echo '{"rejected":false}'; }
 catch (\RuntimeException $e) { echo json_encode(['rejected'=>true,'code'=>$e->getCode(),'headers'=>$headers]); }
 }`)
 	if got["rejected"] != true || got["code"] != float64(502) ||
@@ -264,17 +251,17 @@ if ($path === '/readyz' || $path === '/ready-target') {
     echo '{"status":"ready"}';
     return;
 }
-if ($path === '/api/v1/inputs' && getenv('mode') === 'submit_redirect') {
+if ($path === '/api/v1/actions' && getenv('mode') === 'submit_redirect') {
     header('Location: /submit-target', true, 307);
     echo '{"error":"PRIVATE_UPSTREAM_BODY"}';
     return;
 }
-if ($path === '/api/v1/inputs' && getenv('mode') === 'submit_rejected') {
+if ($path === '/api/v1/actions' && getenv('mode') === 'submit_rejected') {
     http_response_code(400);
     echo '{"error":"PRIVATE_UPSTREAM_BODY"}';
     return;
 }
-if ($path === '/api/v1/inputs' || $path === '/submit-target') {
+if ($path === '/api/v1/actions' || $path === '/submit-target') {
     http_response_code(201);
     echo '{"input_id":"` + directInputID + `","process_id":"` + directProcessID + `","status":"new"}';
     return;
@@ -292,7 +279,7 @@ $conf['dontlog'] = 'error';
 $client = new \dokuwiki\plugin\petar\PetarClient($argv[1], '', 2);
 try {
     $result = str_starts_with(getenv('mode'), 'submit_')
-        ? $client->submitInput('echo-test', 'hello', 'wiki', '` + directRequestID + `')
+        ? $client->submitAction('echo-test', 1, '{}', 'wiki', '` + directRequestID + `')
         : $client->checkReadiness('` + directRequestID + `');
     $out = ['result'=>$result, 'code'=>$result['http_status']];
 } catch (\RuntimeException | \InvalidArgumentException $e) {
@@ -343,7 +330,7 @@ exit 1
 func TestDirectBFFRequests(t *testing.T) {
 	t.Run("submit_rejected", func(t *testing.T) {
 		got := runDirectBFF(t, "submit_rejected")
-		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Result.Success ||
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/actions" || got.Result.Success ||
 			got.Code != 400 || got.Error != "Input rejected" {
 			t.Fatalf("direct HTTP 400 must report a safe rejection after exactly one POST: %#v", got)
 		}
@@ -356,7 +343,7 @@ func TestDirectBFFRequests(t *testing.T) {
 	})
 	t.Run("submit_redirect", func(t *testing.T) {
 		got := runDirectBFF(t, "submit_redirect")
-		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Result.Success ||
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/actions" || got.Result.Success ||
 			got.Code != 502 || got.Error != "Backend request failed" {
 			t.Fatalf("redirect must not reach its target or report a successful submit: %#v", got)
 		}
@@ -370,7 +357,7 @@ func TestDirectBFFRequests(t *testing.T) {
 	})
 	t.Run("submit_direct", func(t *testing.T) {
 		got := runDirectBFF(t, "submit_direct")
-		if strings.Join(got.Requests, "\n") != "POST /api/v1/inputs" || got.Code != 201 ||
+		if strings.Join(got.Requests, "\n") != "POST /api/v1/actions" || got.Code != 201 ||
 			!got.Result.Success || got.Result.RequestID != directRequestID || got.Result.Data.Status != "new" ||
 			got.Result.Data.InputID != directInputID || got.Result.Data.ProcessID != directProcessID {
 			t.Fatalf("unexpected direct submit response: %#v", got)

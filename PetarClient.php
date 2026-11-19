@@ -12,11 +12,11 @@ use RuntimeException;
  * Petar BFF API Client
  *
  * Encapsulates network calls to the Petar backend service using DokuHTTPClient,
- * enforcing security headers, tool white-listing, and robust error handling.
+ * enforcing security headers and normalizing backend responses.
  */
 final class PetarClient
 {
-    private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
+    private const MAX_ACTION_VERSION = 2_147_483_647; // Backend and PostgreSQL use int32.
     private const JOB_STATUSES = ['pending', 'dispatched', 'in_progress', 'completed', 'failed'];
     private const JOB_PAGE_SIZE = 20;
     private const MAX_JOB_RESULT_BYTES = 1_048_576;
@@ -111,26 +111,12 @@ final class PetarClient
         ];
     }
 
-    /**
-     * Submit an input task via POST /api/v1/inputs
-     *
-     * @param string $tool
-     * @param string $message
-     * @param string $user
-     * @param string|null $requestId
-     * @return array Normalized envelope
-     * @throws InvalidArgumentException
-     * @throws RuntimeException
-     */
-    public function submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array
+    /** Submit an action with the original JSON value via POST /api/v1/actions. */
+    public function submitAction(string $action, int $version, string $dataJson, string $user, ?string $requestId = null): array
     {
-        // 1. Strict validation
-        if (!in_array($tool, self::ALLOWED_TOOLS, true)) {
-            throw new InvalidArgumentException('Disallowed or unknown tool');
-        }
-
-        if (trim($message) === '') {
-            throw new InvalidArgumentException('Input message cannot be empty');
+        if (trim($action) === '' || !preg_match('//u', $action) || $version < 1 ||
+            $version > self::MAX_ACTION_VERSION || !json_validate($dataJson)) {
+            throw new InvalidArgumentException('Invalid action submission');
         }
 
         $user = trim(str_replace(["\r", "\n"], '', $user));
@@ -147,36 +133,13 @@ final class PetarClient
             $requestId = $this->generateUuidV4();
         }
 
-        // 2. Prepare payload and headers
-        $payload = ['tool' => $tool];
-        if ($tool === 'yt-dlp') {
-            $urlParts = parse_url($message);
-            if (!filter_var($message, FILTER_VALIDATE_URL) || $urlParts === false ||
-                empty($urlParts['host']) || !in_array(strtolower($urlParts['scheme'] ?? ''), ['http', 'https'], true)) {
-                throw new InvalidArgumentException('An absolute HTTP/HTTPS URL is required');
-            }
-            $payload['url'] = $message;
-        } elseif ($tool === 'fabric') {
-            $pattern = $pattern ?? 'summarize';
-            if (!preg_match('/^[A-Za-z0-9_-]{1,128}$/D', $pattern)) {
-                throw new InvalidArgumentException('Invalid pattern name');
-            }
-            $payload['text'] = $message;
-            $payload['pattern'] = $pattern;
-        } else {
-            $payload['message'] = $message;
-        }
-        $payloadData = ['source' => 'dokuwiki', 'payload' => $payload];
-
-        try {
-            $jsonBody = json_encode($payloadData, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        } catch (\JsonException $e) {
-            throw new RuntimeException('Failed to encode request payload: ' . $e->getMessage(), 0, $e);
-        }
-
-        $url = $this->baseUrl . '/api/v1/inputs';
+        // Embed the checked original value without a decode/encode round trip.
+        $jsonBody = '{"action":' . json_encode($action, JSON_THROW_ON_ERROR)
+            . ',"version":' . $version . ',"data":' . $dataJson . '}';
+        $url = $this->baseUrl . '/api/v1/actions';
 
         $client = $this->newDirectClient();
+        $client->debug = false;
         $client->headers['Accept'] = 'application/json';
         $client->headers['Content-Type'] = 'application/json';
         $client->headers['X-Request-ID'] = $requestId;
@@ -222,6 +185,37 @@ final class PetarClient
             'data' => ['input_id' => $data['input_id'], 'process_id' => $data['process_id'], 'status' => 'new'],
             'error' => null,
         ];
+    }
+
+    /** Read active action/version pairs in backend order. */
+    public function listActions(string $user, string $requestId): array
+    {
+        $client = $this->newDirectClient();
+        $client->debug = false;
+        $client->headers['Accept'] = 'application/json';
+        $client->headers['X-Request-ID'] = $requestId;
+        $client->headers['X-Wiki-User'] = str_replace(["\r", "\n"], '', $user);
+        if ($this->apiSecret !== '') {
+            $client->headers['X-API-Key'] = $this->apiSecret;
+        }
+        $rows = $client->sendRequest($this->baseUrl . '/api/v1/actions', '', 'GET')
+            && (int)$client->status === 200 ? json_decode($client->resp_body) : null;
+        if (is_array($rows)) {
+            $actions = [];
+            foreach ($rows as $row) {
+                if (!$row instanceof \stdClass || !is_string($row->action ?? null) || trim($row->action) === '' ||
+                    !is_int($row->version ?? null) || $row->version < 1 ||
+                    $row->version > self::MAX_ACTION_VERSION || !is_string($row->title ?? null)) {
+                    break;
+                }
+                $actions[] = ['action' => $row->action, 'version' => $row->version, 'title' => $row->title];
+            }
+            if (count($actions) === count($rows)) {
+                return $actions;
+            }
+        }
+        Logger::error('petar', 'Action catalog unavailable [req_id=' . $requestId . ']', __FILE__, __LINE__);
+        throw new RuntimeException('Backend request failed', 502);
     }
 
     /** Read a shared page; the wiki user is for tracing, not filtering. */

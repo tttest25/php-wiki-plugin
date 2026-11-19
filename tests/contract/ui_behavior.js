@@ -13,7 +13,7 @@ function standaloneRender(locale) {
     for (const m of lang.matchAll(/\$lang\['([^']+)'\] = '([^']*)';/g)) strings[m[1]] = m[2];
     const escape = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     const html = `<div class="plugin_petar" data-ui="${escape(JSON.stringify(strings))}"><form>
-        <select name="tool"><option value="yt-dlp">yt-dlp</option></select>
+        <select name="tool" disabled></select>
         <label class="petar-message-label"></label><textarea name="message"></textarea>
         <small class="petar-hint"></small><p class="petar-pattern" hidden>
         <input name="pattern" value="summarize" disabled /></p>
@@ -66,7 +66,7 @@ function parse(html) {
             if (!['input', 'br', 'hr'].includes(tag)) stack.push(e);
         } else stack.at(-1)._text += decode(token);
     }
-    for (const select of root.querySelectorAll('select')) select.value = select.querySelector('option').value;
+    for (const select of root.querySelectorAll('select')) select.value = select.querySelector('option')?.value || '';
     return root;
 }
 const flush = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
@@ -74,13 +74,30 @@ async function run(locale) {
     const document = parse(rendered[locale].html), requests = [], timers = new Map();
     document.createElement = tag => new Element(tag);
     document.getElementById = id => document.querySelectorAll('[id]').find(e => e.attrs.id === id);
-    let timerID = 0;
+    let timerID = 0, firstCatalog, holdCatalog = false;
+    const heldCatalogs = [];
+    const actions = [
+        {action: 'yt-dlp', version: 1, title: 'Video'},
+        {action: 'fabric', version: 1, title: 'Fabric'},
+        {action: 'echo-test', version: 1, title: 'Echo'},
+        {action: 'fabric', version: 2, title: '<Fabric v2>'},
+    ];
     const context = {
         document, URLSearchParams, AbortController, console,
         setTimeout(cb, delay) { assert(delay > 0 && delay <= 15000); timers.set(++timerID, cb); return timerID; },
         clearTimeout(id) { timers.delete(id); },
         fetch(url, options) {
             return new Promise((resolve, reject) => {
+                if (url.includes('action=actions')) {
+                    if (holdCatalog) {
+                        heldCatalogs.push({resolve});
+                        return;
+                    }
+                    const finish = () => resolve({ok: true, status: 200, headers: {get: () => null}, json: async () => ({actions})});
+                    if (!firstCatalog) firstCatalog = finish;
+                    else finish();
+                    return;
+                }
                 if (url.includes('action=jobs')) {
                     resolve({ok: true, status: 200, headers: {get: () => null},
                         json: async () => ({jobs: [], next_cursor: null})});
@@ -105,7 +122,6 @@ async function run(locale) {
     });
     const a = parts(widgets[0]), b = parts(widgets[1]), s = rendered[locale].strings;
     assert(a.submit.disabled && b.submit.disabled);
-    assert.equal(a.label.textContent, s.label_url);
     assert(a.row.hidden && a.pattern.disabled);
     a.form.fire('submit');
     assert.equal(requests.length, 2, 'programmatic submit blocked before readiness');
@@ -115,22 +131,26 @@ async function run(locale) {
     };
     await reply(0, 503, {status: 'unavailable', error: '<img src=x onerror=evil()>'});
     await reply(1, 200, {status: 'ready'});
+    assert(b.submit.disabled, 'ready without a catalog must not enable submit');
+    assert(firstCatalog, 'ready form must request the catalog');
+    firstCatalog();
+    await flush();
     assert(a.submit.disabled && !b.submit.disabled);
     assert.equal(a.status.textContent, s.err_backend, 'localized readiness error, no raw backend text');
     a.retry.fire('click');
     assert.equal(requests.length, 3);
     await reply(2, 200, {status: 'ready'});
     assert(!a.submit.disabled);
-    a.tool.value = 'fabric'; a.tool.fire('change');
+    a.tool.value = '1'; a.tool.fire('change');
     assert.equal(a.label.textContent, s.label_text);
     assert(!a.row.hidden && !a.pattern.disabled && a.pattern.required);
     assert.equal(a.pattern.value, 'summarize');
     a.pattern.value = 'custom_pattern'; a.message.value = '  <b>source</b>\n'; a.form.fire('submit');
     assert(a.submit.disabled && !b.submit.disabled);
     const body = new URLSearchParams(requests[3].options.body);
-    assert.equal(body.get('message'), '  <b>source</b>\n');
-    assert.equal(body.get('pattern'), 'custom_pattern');
-    assert.equal(body.get('tool'), 'fabric');
+    assert.deepEqual(JSON.parse(body.get('data')), {text: '  <b>source</b>\n', pattern: 'custom_pattern'});
+    assert.equal(body.get('action_name'), 'fabric');
+    assert.equal(body.get('version'), '1');
     assert.equal(body.get('sectok'), 'token"<&');
     assert(!body.has('url') && !body.has('text'));
     a.form.fire('submit'); assert.equal(requests.length, 4, 'no duplicate submit');
@@ -145,11 +165,11 @@ async function run(locale) {
     assert(a.result.textContent.includes('<input>') && a.result.textContent.includes('<trace>'));
     assert.equal(b.result.textContent, '', 'other result untouched');
     // Timeout releases busy but requires explicit retry and never resubmits.
-    b.tool.value = 'echo-test'; b.tool.fire('change');
+    b.tool.value = '2'; b.tool.fire('change');
     assert.equal(b.label.textContent, s.label_message);
     assert(b.pattern.disabled && b.row.hidden);
     b.message.value = 'hello'; b.form.fire('submit');
-    assert(!new URLSearchParams(requests[5].options.body).has('pattern'));
+    assert.deepEqual(JSON.parse(new URLSearchParams(requests[5].options.body).get('data')), {message: 'hello'});
     for (const cb of [...timers.values()]) cb();
     await flush();
     assert(b.submit.disabled);
@@ -175,18 +195,31 @@ async function run(locale) {
     assert.equal(a.status.textContent, s.err_backend, 'readiness timeout localized');
     a.retry.fire('click');
     await reply(11, 200, {status: 'ready'});
-    a.tool.value = 'yt-dlp'; a.tool.fire('change');
+    a.tool.value = '0'; a.tool.fire('change');
     assert.equal(a.label.textContent, s.label_url);
     assert.equal(a.message.getAttribute('placeholder'), s.hint_url);
+    a.tool.value = '3'; a.tool.fire('change');
+    assert.equal(a.label.textContent, s.label_json);
+    assert(a.row.hidden);
+    a.message.value = '{'; a.form.fire('submit');
+    assert.equal(requests.length, 12);
+    assert.equal(a.result.textContent, s.err_invalid_json);
+    a.message.value = '9007199254740993'; a.form.fire('submit');
+    const raw = new URLSearchParams(requests[12].options.body);
+    assert.equal(raw.get('action_name'), 'fabric');
+    assert.equal(raw.get('version'), '2');
+    assert.equal(raw.get('data'), '9007199254740993');
+    await reply(12, 400, {error: 'PRIVATE'});
+    assert(a.result.textContent.includes(s.err_submit_rejected));
+    a.tool.value = '0'; a.tool.fire('change');
     a.message.value = 'https://example.org/video'; a.form.fire('submit');
-    const urlBody = new URLSearchParams(requests[12].options.body);
-    assert.equal(urlBody.get('message'), 'https://example.org/video');
-    assert(!urlBody.has('pattern') && !urlBody.has('url'));
-    await reply(12, 502, {error: '<script>secret backend</script>'});
+    const urlBody = new URLSearchParams(requests[13].options.body);
+    assert.deepEqual(JSON.parse(urlBody.get('data')), {url: 'https://example.org/video'});
+    await reply(13, 502, {error: '<script>secret backend</script>'});
     assert(a.submit.disabled);
     assert(a.result.textContent.includes(s.err_submit_uncertain));
     assert(!a.result.textContent.includes('secret backend'));
-    assert.equal(requests.length, 13, 'server error never automatically retries submit');
+    assert.equal(requests.length, 14, 'server error never automatically retries submit');
     assert.equal(timers.size, 0);
     const postCount = () => requests.filter(r => r.options.method === 'POST').length;
     const before = postCount(), rejectionIndex = requests.length;
@@ -204,6 +237,32 @@ async function run(locale) {
     assert.equal(b.result.dataset.processId, undefined);
     assert(!b.submit.disabled, 'the user can correct the input and submit manually');
     assert.equal(postCount(), before + 1, 'no automatic POST after rejection');
+    holdCatalog = true;
+    const ready = async () => {
+        b.retry.fire('click');
+        await reply(requests.length - 1, 200, {status: 'ready'});
+    };
+    const finishCatalog = async (index, code, data) => {
+        heldCatalogs[index].resolve({ok: code === 200, status: code, headers: {get: () => null}, json: async () => data});
+        await flush();
+    };
+    await ready();
+    await ready();
+    await finishCatalog(1, 502, {error: privateMarker});
+    await finishCatalog(0, 200, {actions});
+    assert(b.submit.disabled, 'late catalog never takes over a newer failed check');
+    assert.equal(b.status.textContent, s.catalog_error);
+    b.form.fire('submit');
+    assert.equal(postCount(), before + 1, 'no stale selection submitted after catalog error');
+    await ready();
+    await finishCatalog(2, 200, {actions: []});
+    assert(b.submit.disabled);
+    assert.equal(b.status.textContent, s.catalog_empty);
+    assert.equal(b.tool.children.length, 0, 'no static fallback');
+    await ready();
+    await finishCatalog(3, 200, {actions});
+    assert(!b.submit.disabled);
+    assert.equal(b.tool.children[3].textContent, '<Fabric v2> (fabric v2)');
     for (const r of requests) {
         assert(r.url.startsWith('/lib/exe/ajax.php?call=plugin_petar&action='));
         assert(r.options.signal, 'finite timeout signal');

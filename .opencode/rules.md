@@ -35,8 +35,8 @@
   `PetarClient` → backend. Standalone-эндпоинтов нет.
 - **HTTP:** только `\dokuwiki\HTTP\DokuHTTPClient`. Запрещены `curl_*` и
   `file_get_contents()`. Заголовки: `X-Request-ID` (UUIDv4), `X-Wiki-User`,
-  `X-API-Key` (только если `api_secret` не пуст). Белый список инструментов:
-  `yt-dlp`, `fabric`, `echo-test`.
+  `X-API-Key` (только если `api_secret` не пуст). Выбор пары действие/версия
+  из каталога; отправка только через универсальный API действий.
 - **Безопасность:** File Guard в каждом PHP
   (`if (!defined('DOKU_INC')) die();`); CSRF `checkSecurityToken()` на POST;
   ACL только `ai`/`admin` на уровне AJAX и рендера синтаксиса (403 JSON или

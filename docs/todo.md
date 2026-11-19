@@ -322,6 +322,9 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
   **Проверки:** RED → GREEN, `QUALITY GATE PASSED`, Chromium `ACCEPTANCE PASSED`, независимый review — PASS.
   **Коммит:** `feat: show public results for selected journal jobs`.
 
-- [ ] **PHP-06: Динамический каталог и универсальная форма.** Выбирать действие/версию через BFF, сохранять специальные формы, для прочих давать ввод JSON. Приёмка: неверный JSON не отправляется, правила действия проверяет БД; новое действие не требует правки PHP/JS. Зависит от T23/T24. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
+- [x] **PHP-06: Динамический каталог и универсальная форма.** Все пары отправляются через BFF в `POST /api/v1/actions`; три формы v1 сохранены, новая пара доступна через JSON. Неверный JSON не вызывает POST, legacy-ввод → 400 без запроса, отказ БД показан безопасно. План: [.opencode/tasks/php_06_dynamic_actions.md](../.opencode/tasks/php_06_dynamic_actions.md).
+  **Файлы:** `PetarClient.php`, `action.php`, `syntax.php`, `script.js`, `lang/{en,ru}/lang.php`, `tests/contract/{action,client,ui}_test.go`, `tests/contract/ui_behavior.js`, `tests/acceptance/{fixture,smoke.spec}.js`, `docs/{architecture,rules,todo}.md`, `AGENTS.md`, `.opencode/rules.md`, `.opencode/tasks/php_06_dynamic_actions.md`.
+  **Проверки:** `TestActionsCatalog` RED → GREEN, `QUALITY GATE PASSED`, Chromium `ACCEPTANCE PASSED`, независимый review — PASS, Human Sign-off получен.
+  **Коммит:** `feat: submit catalog actions through the universal BFF`.
 
 - [ ] **PHP-07: Специальное представление или JSON.** Выбирать представление по типу/версии результата, иначе показывать форматированный публичный JSON как текст; исходный JSON доступен и для специальной карточки. Приёмка: после PHP-05 проверен fallback на фикстуре; после PHP-06 и T27 браузерный word-count работает без специальной формы/карточки. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).

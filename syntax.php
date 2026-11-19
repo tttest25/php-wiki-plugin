@@ -11,7 +11,6 @@ if (!defined('DOKU_INC')) die();
  */
 final class syntax_plugin_petar extends SyntaxPlugin
 {
-    private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
     /**
      * @return string
@@ -94,6 +93,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
             'hint_text', 'status_checking', 'status_ready', 'status_busy',
             'status_accepted', 'err_backend', 'err_request', 'err_submit_rejected', 'err_submit_uncertain',
             'label_status', 'label_input_id', 'label_process_id', 'label_request_id',
+            'label_json', 'hint_json', 'err_invalid_json', 'catalog_loading', 'catalog_empty', 'catalog_error',
         ] as $key) {
             $strings[$key] = $this->getLang($key);
         }
@@ -103,18 +103,12 @@ final class syntax_plugin_petar extends SyntaxPlugin
         $labelMessage = hsc($this->getLang('label_url'));
         $btnSubmit = hsc($this->getLang('btn_submit'));
 
-        $optionsHtml = '';
-        foreach (self::ALLOWED_TOOLS as $tool) {
-            $safeTool = hsc($tool);
-            $optionsHtml .= '<option value="' . $safeTool . '">' . $safeTool . '</option>';
-        }
-
         $renderer->doc .= '<div class="plugin_petar" data-ui="' . $ui . '">';
         $renderer->doc .= '<form id="' . $id . '-form" method="post" action="">';
         
         $renderer->doc .= '<p class="row">';
         $renderer->doc .= '<label for="' . $id . '-tool">' . $labelTool . '</label>';
-        $renderer->doc .= '<select id="' . $id . '-tool" name="tool">' . $optionsHtml . '</select>';
+        $renderer->doc .= '<select id="' . $id . '-tool" name="tool" disabled></select>';
         $renderer->doc .= '</p>';
 
         $renderer->doc .= '<p class="row">';

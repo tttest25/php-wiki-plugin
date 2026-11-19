@@ -15,6 +15,10 @@ const resultPath = job => `/api/v1/jobs/${job}/result`;
 const publication = marker => ({ type: 'echo', version: 1, data: { marker } });
 const routes = new Map([
     ['/readyz', [200, { status: 'ready' }]],
+    ['/api/v1/actions', [200, [
+        { action: 'echo-test', version: 1, title: 'Echo test' },
+        { action: 'fixture-action', version: 2, title: 'Fixture v2' },
+    ]]],
     ['/api/v1/jobs?limit=21', [200, jobs]],
     ['/api/v1/jobs?limit=21&status=completed', [200, jobs.slice(0, 2)]],
     ['/api/v1/jobs?limit=21&status=failed', [200, jobs.slice(2)]],
@@ -22,7 +26,29 @@ const routes = new Map([
     [resultPath(second), [200, publication('second-job-public')]],
     [resultPath(failed), [409, { error: 'job_failed' }]],
 ]);
+let submissions = 0;
 http.createServer((request, response) => {
+    if (request.method === 'POST' && request.url === '/api/v1/actions') {
+        let raw = '';
+        request.setEncoding('utf8');
+        request.on('data', chunk => { raw += chunk; });
+        request.on('end', () => {
+            const expected = [
+                '{"action":"echo-test","version":1,"data":{"message":"  <tag> & \\"quote\\"  "}}',
+                '{"action":"fixture-action","version":2,"data":{"n":9007199254740993}}',
+                '{"action":"fixture-action","version":2,"data":[]}',
+            ];
+            const index = submissions++;
+            const valid = raw === expected[index];
+            if (!valid) console.error('Unexpected action body #%d: %s', index, raw);
+            const status = !valid ? 500 : index === 2 ? 400 : 201;
+            response.writeHead(status, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify(status === 201
+                ? { input_id: index === 0 ? first : second, process_id: processId, status: 'new' }
+                : { error: 'PRIVATE_FIXTURE_DIAGNOSTIC' }));
+        });
+        return;
+    }
     const route = request.method === 'GET' && routes.get(request.url);
     if (!route) console.error('Unexpected fixture route: %s %s', request.method, request.url);
     const [status, body] = route || [404, { error: 'unexpected fixture request' }];

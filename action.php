@@ -41,7 +41,7 @@ final class action_plugin_petar extends ActionPlugin
 
         try {
             $action = $this->stringParam($INPUT, 'action', 'readyz');
-            if (!in_array($action, ['readyz', 'submit', 'jobs', 'job_result'], true)) {
+            if (!in_array($action, ['readyz', 'submit', 'actions', 'jobs', 'job_result'], true)) {
                 $this->fail('Unknown action', 404);
                 return;
             }
@@ -74,6 +74,12 @@ final class action_plugin_petar extends ActionPlugin
                 return;
             }
 
+            if ($action === 'actions') {
+                header('Cache-Control: no-store');
+                $this->sendJson(['actions' => $client->listActions($user, $this->requestId)], 200);
+                return;
+            }
+
             if ($action === 'jobs') {
                 $status = $INPUT->get->has('status') ? $this->stringParam($INPUT->get, 'status') : null;
                 $cursor = $INPUT->get->has('cursor') ? $this->stringParam($INPUT->get, 'cursor') : null;
@@ -91,10 +97,13 @@ final class action_plugin_petar extends ActionPlugin
                 return;
             }
 
-            $tool = $this->stringParam($INPUT->post, 'tool');
-            $message = $this->stringParam($INPUT->post, 'message');
-            $pattern = $INPUT->post->has('pattern') ? $this->stringParam($INPUT->post, 'pattern') : null;
-            $result = $client->submitInput($tool, $message, $user, $this->requestId, $pattern);
+            $name = $this->stringParam($INPUT->post, 'action_name');
+            $rawVersion = $this->stringParam($INPUT->post, 'version');
+            $version = filter_var($rawVersion, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if (!preg_match('/^[1-9][0-9]*$/D', $rawVersion) || $version === false) {
+                throw new InvalidArgumentException('Invalid field: version');
+            }
+            $result = $client->submitAction($name, $version, $this->stringParam($INPUT->post, 'data'), $user, $this->requestId);
             $this->sendJson($result['data'], 201);
         } catch (InvalidArgumentException $e) {
             $this->fail($e->getMessage(), 400);

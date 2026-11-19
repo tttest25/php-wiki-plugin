@@ -47,7 +47,7 @@ func actionPHP(t *testing.T, tc map[string]interface{}) map[string]interface{} {
 $case = json_decode(base64_decode('`+base64Fixture(raw)+`'),true);
 $INPUT = new TestInput(['action'=>$case['action'] ?? 'submit']);
 $INPUT->get = new TestInput($case['get'] ?? []);
-$INPUT->post = new TestInput($case['post'] ?? ['tool'=>'echo-test','message'=>'hello']);
+$INPUT->post = new TestInput($case['post'] ?? ['action_name'=>'echo-test','version'=>'1','data'=>'{"message":"hello"}']);
 $INPUT->server = new TestInput([
  'REMOTE_USER'=>$case['user'] ?? 'wiki', 'REQUEST_METHOD'=>$case['method'] ?? 'POST',
  'HTTP_X_REQUEST_ID'=>$case['request_id'] ?? '12345678-1234-4234-8234-123456789abc'
@@ -69,6 +69,92 @@ $event->data = $case['call'] ?? 'plugin_petar';
 }
 
 func base64Fixture(raw []byte) string { return base64.StdEncoding.EncodeToString(raw) }
+
+func TestActionsCatalog(t *testing.T) {
+	const backend = `[{"action":"fabric","version":1,"title":"Fabric"},{"action":"fabric","version":2,"title":"Fabric v2"}]`
+	got := actionPHP(t, map[string]interface{}{
+		"action": "actions", "method": "GET", "request_id": directRequestID,
+		"backend_code": 200, "backend_body": backend,
+	})
+	if got["code"] != float64(200) {
+		t.Fatalf("catalog status: got %v, want 200 (%#v)", got["code"], got)
+	}
+	var rows interface{}
+	if err := json.Unmarshal([]byte(backend), &rows); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]interface{}{"actions": rows, "request_id": directRequestID}
+	if !reflect.DeepEqual(got["body"], want) {
+		t.Fatalf("catalog: got %#v, want %#v", got["body"], want)
+	}
+	sent, ok := got["sent"].(map[string]interface{})
+	if !ok || sent["url"] != "http://backend/api/v1/actions" || sent["method"] != "GET" || sent["raw_body"] != "" ||
+		sent["max_redirect"] != float64(0) {
+		t.Fatalf("catalog transport: %#v", got["sent"])
+	}
+	for _, tc := range []struct {
+		label string
+		input map[string]interface{}
+		code  float64
+		sent  bool
+	}{
+		{"anonymous", map[string]interface{}{"user": ""}, 403, false},
+		{"ordinary", map[string]interface{}{"groups": []string{"user"}}, 403, false},
+		{"admin_empty", map[string]interface{}{"groups": []string{"admin"}, "backend_body": "[]"}, 200, true},
+		{"POST", map[string]interface{}{"method": "POST"}, 405, false},
+		{"csrf", map[string]interface{}{"method": "POST", "csrf": false}, 403, false},
+		{"object", map[string]interface{}{"backend_body": "{}"}, 502, true},
+		{"partial", map[string]interface{}{"backend_body": `[{"action":"fabric","version":1,"title":"Fabric"},{"action":"other","version":"2","title":"PRIVATE"}]`}, 502, true},
+		{"redirect", map[string]interface{}{"backend_code": 302, "backend_body": backend}, 502, true},
+		{"transport_failure", map[string]interface{}{"backend_ok": false}, 502, true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			input := map[string]interface{}{"action": "actions", "method": "GET", "backend_code": 200, "backend_body": backend}
+			for key, value := range tc.input {
+				input[key] = value
+			}
+			got := actionPHP(t, input)
+			if got["code"] != tc.code || (got["sent"] != nil) != tc.sent {
+				t.Fatalf("unexpected catalog outcome: %#v", got)
+			}
+			body := got["body"].(map[string]interface{})
+			if tc.code == 502 && (body["error"] != "Backend request failed" || body["actions"] != nil) {
+				t.Fatalf("unsafe or partial catalog: %#v", body)
+			}
+			if tc.label == "admin_empty" && !reflect.DeepEqual(body["actions"], []interface{}{}) {
+				t.Fatalf("expected empty array, got %#v", body)
+			}
+		})
+	}
+}
+
+func TestUniversalSubmit(t *testing.T) {
+	const data = `{"n":9007199254740993,"value":[{},[],null,"a\"b"]}`
+	got := actionPHP(t, map[string]interface{}{
+		"post": map[string]interface{}{"action_name": "fixture-action", "version": "2", "data": data},
+	})
+	sent, ok := got["sent"].(map[string]interface{})
+	if got["code"] != float64(201) || !ok || sent["url"] != "http://backend/api/v1/actions" ||
+		sent["raw_body"] != `{"action":"fixture-action","version":2,"data":`+data+`}` {
+		t.Fatalf("universal submit: %#v", got)
+	}
+	for _, post := range []map[string]interface{}{
+		{"tool": "echo-test", "message": "old"},
+		{"action_name": "", "version": "1", "data": "null"},
+		{"action_name": "new", "version": "0", "data": "null"},
+		{"action_name": "new", "version": "2147483648", "data": "null"},
+		{"action_name": "new", "version": "1.0", "data": "null"},
+		{"action_name": "new", "version": "999999999999999999999", "data": "null"},
+		{"action_name": "new", "version": "1", "data": "{"},
+		{"action_name": "new", "version": "1", "data": []string{"{}"}},
+		{"action_name": "new", "version": "1"},
+	} {
+		got := actionPHP(t, map[string]interface{}{"post": post})
+		if got["code"] != float64(400) || got["sent"] != nil {
+			t.Errorf("invalid input %#v made it past BFF: %#v", post, got)
+		}
+	}
+}
 
 func TestJobResultAction(t *testing.T) {
 	t.Run("selected_job", func(t *testing.T) {
@@ -315,10 +401,10 @@ func TestBFFBranches(t *testing.T) {
 		{"unknownCSRF", map[string]interface{}{"action": "unknown", "csrf": false}, 403},
 		{"method", map[string]interface{}{"method": "GET"}, 405},
 		{"readyMethod", map[string]interface{}{"action": "readyz"}, 405},
-		{"array", map[string]interface{}{"post": map[string]interface{}{"tool": []string{"echo-test"}, "message": "text"}}, 400},
-		{"patternArray", map[string]interface{}{"post": map[string]interface{}{"tool": "fabric", "message": "text", "pattern": []string{"summarize"}}}, 400},
-		{"patternNumber", map[string]interface{}{"post": map[string]interface{}{"tool": "fabric", "message": "text", "pattern": 123}}, 400},
-		{"messageArray", map[string]interface{}{"post": map[string]interface{}{"tool": "fabric", "message": []string{"text"}}}, 400},
+		{"nameArray", map[string]interface{}{"post": map[string]interface{}{"action_name": []string{"echo-test"}, "version": "1", "data": "{}"}}, 400},
+		{"versionArray", map[string]interface{}{"post": map[string]interface{}{"action_name": "fabric", "version": []string{"1"}, "data": "{}"}}, 400},
+		{"versionNumber", map[string]interface{}{"post": map[string]interface{}{"action_name": "fabric", "version": 1, "data": "{}"}}, 400},
+		{"dataArray", map[string]interface{}{"post": map[string]interface{}{"action_name": "fabric", "version": "1", "data": []string{"{}"}}}, 400},
 		{"actionArray", map[string]interface{}{"action": []string{"submit"}}, 400},
 		{"backend", map[string]interface{}{"backend_code": 500, "backend_body": `{"error":"SECRET"}`}, 502},
 		{"configuration", map[string]interface{}{"badconfig": true}, 500},
@@ -377,7 +463,7 @@ func TestBFFGeneratesRequestID(t *testing.T) {
 	for _, id := range []interface{}{"", "invalid", []string{"invalid"}} {
 		got := actionPHP(t, map[string]interface{}{
 			"request_id": id, "post": map[string]interface{}{
-				"tool": "echo-test", "message": "hello", "sectok": "11111111-1111-4111-8111-111111111111",
+				"action_name": "echo-test", "version": "1", "data": `{"message":"hello"}`, "sectok": "11111111-1111-4111-8111-111111111111",
 			},
 		})
 		body := got["body"].(map[string]interface{})
@@ -407,7 +493,7 @@ $case = ['csrf'=>!isset($_GET['badcsrf'])];
 $_SERVER['REMOTE_USER'] = isset($_GET['anon']) ? '' : 'wiki';
 $INPUT = new \dokuwiki\Input\Input();
 $USERINFO = ['grps'=>['ai']];
-if (($_GET['action'] ?? '') === 'jobs') {
+if (in_array($_GET['action'] ?? '', ['jobs', 'actions'], true)) {
  \dokuwiki\HTTP\DokuHTTPClient::$code = 200;
  \dokuwiki\HTTP\DokuHTTPClient::$body = '[]';
 }
@@ -451,15 +537,17 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 		{"?action=readyz", "GET", "", "12345678-1234-4234-8234-123456789abc", 200},
 		{"?action=readyz&anon=1", "GET", "", "", 403},
 		{"?action=submit&badcsrf=1", "POST", "", "", 403},
-		{"?action=submit", "POST", "tool=echo-test&message=hello", "", 201},
-		{"?action=submit", "POST", "tool[]=fabric&message=text", "", 400},
-		{"?action=submit", "POST", "tool=%FF&message=text", "", 400},
+		{"?action=submit", "POST", "action_name=echo-test&version=1&data=%7B%7D", "", 201},
+		{"?action=submit", "POST", "action_name[]=fabric&version=1&data=%7B%7D", "", 400},
+		{"?action=submit", "POST", "action_name=%FF&version=1&data=%7B%7D", "", 400},
 		{"?action=status", "GET", "", "", 404},
 		{"?action=submit", "GET", "", "", 405},
 		{"?action=readyz", "GET", "", "invalid", 200},
+		{"?action=actions", "GET", "", directRequestID, 200},
+		{"?action=actions", "POST", "", "", 405},
 		{"?action=readyz&backend_fail=1", "GET", "", "", 503},
-		{"?action=submit&backend_fail=1", "POST", "tool=echo-test&message=hello", "", 502},
-		{"?action=submit&backend_reject=1", "POST", "tool=echo-test&message=hello", directRequestID, 400},
+		{"?action=submit&backend_fail=1", "POST", "action_name=echo-test&version=1&data=%7B%7D", "", 502},
+		{"?action=submit&backend_reject=1", "POST", "action_name=echo-test&version=1&data=%7B%7D", directRequestID, 400},
 		{"?action=jobs", "GET", "", "invalid", 200},
 		{"?action=jobs&status[]=failed", "GET", "", "", 400},
 		{"?action=jobs&cursor=", "GET", "", "", 400},
@@ -503,14 +591,16 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 			}
 			if tc.code == 405 {
 				want := "POST"
-				if strings.HasPrefix(tc.query, "?action=jobs") || strings.HasPrefix(tc.query, "?action=job_result") {
+				if strings.HasPrefix(tc.query, "?action=jobs") || strings.HasPrefix(tc.query, "?action=job_result") ||
+					tc.query == "?action=actions" {
 					want = "GET"
 				}
 				if resp.Header.Get("Allow") != want {
 					t.Fatalf("expected Allow: %s", want)
 				}
 			}
-			if tc.query == "?action=jobs" && tc.code == 200 && resp.Header.Get("Cache-Control") != "no-store" {
+			if (tc.query == "?action=jobs" || tc.query == "?action=actions") &&
+				tc.code == 200 && resp.Header.Get("Cache-Control") != "no-store" {
 				t.Fatal("missing Cache-Control: no-store")
 			}
 			if strings.HasPrefix(tc.query, "?action=job_result") && tc.method == "GET" &&

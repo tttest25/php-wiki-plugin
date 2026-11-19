@@ -37,7 +37,8 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
   ├── инициализация PetarClient(petar_url, api_secret, timeout) из getConf()
   ├── маршрутизация по параметру action:
    │     readyz  → PetarClient::checkReadiness(requestId?)
-    │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
+    │     actions → PetarClient::listActions(user, requestId)
+    │     submit  → PetarClient::submitAction(action, version, dataJson, user, requestId?)
    │     jobs    → PetarClient::listJobs(user, status?, cursor?, requestId?)
    │     job_result → PetarClient::getJobResult(user, jobId, requestId?)
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
@@ -46,11 +47,12 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
 PetarClient.php  (namespace dokuwiki\plugin\petar, класс PetarClient)
   │  \dokuwiki\HTTP\DokuHTTPClient (sendRequest), БЕЗ curl_*/file_get_contents
   │  заголовки: X-Request-ID (UUIDv4), X-Wiki-User, X-API-Key (только если api_secret != '')
-  │  валидация tool по белому списку: yt-dlp | fabric | echo-test
+   │  проверка оболочки универсального ввода; правила действия проверяет БД
   ▼
 backend petar_app (параметризованный URL)
   GET  /readyz          → 200 {"status":"ready"} | 503 {"status":"unavailable","error":"..."}
-   POST /api/v1/inputs   → 201 {"input_id","process_id","status":"new"}
+    GET  /api/v1/actions → 200 [{action,version,title}, ...]
+    POST /api/v1/actions → 201 {"input_id","process_id","status":"new"}
    GET  /api/v1/jobs    → 200 [job, ...]
    GET  /api/v1/jobs/{id}/result → публичный результат или состояние задания
 ```
@@ -131,42 +133,38 @@ backend petar_app (параметризованный URL)
 - `X-API-Key`: отправляется **только если** `$apiSecret` не пуст;
   backend-проверка ключа в настоящий момент отключена, но контракт сохраняется.
 
-### 4.3. Белый список инструментов
+### 4.3. Каталог действий
 
-```php
-private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
-```
-
-- `tool` валидируется строго (`in_array($tool, self::ALLOWED_TOOLS, true)`).
-- Невалидный `tool` → исключение `InvalidArgumentException`, в `action.php`
-  маппится в `400 Bad Request`.
+Список доступных пар имя/версия приходит из backend. Плагин не содержит
+белого списка для отправки. Три известные пары версии 1 имеют специальные
+поля формы; для остальных доступен JSON-ввод.
 
 ### 4.4. Публичный API класса
 
 | Метод | HTTP backend | Описание |
 |---|---|---|
 | `checkReadiness(?string $requestId = null): array` | `GET /readyz` | Успех только при HTTP 200 и объекте с `status=ready`; возвращает нормализованный конверт. BFF отображает неготовность как 503 `status=unavailable`, без сырой ошибки backend. |
-| `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Маппинг канонического payload выполняется только в клиенте. Возвращает конверт `success,http_status,request_id,data,error`; `data` содержит проверенные UUID input/process и `status=new`. |
+| `listActions(string $user, string $requestId): array` | `GET /api/v1/actions` | Только прямой HTTP 200 и валидный массив `action/version/title`; невалидный ответ — безопасный 502. |
+| `submitAction(string $action, int $version, string $dataJson, string $user, ?string $requestId = null): array` | `POST /api/v1/actions` | Возвращает конверт `success,http_status,request_id,data,error`; `data` содержит проверенные UUID input/process и `status=new`. |
 | `listJobs(string $user, ?string $status = null, ?string $cursor = null, ?string $requestId = null): array` | `GET /api/v1/jobs` | Общая страница без фильтра по пользователю. Возвращает `jobs` и `next_cursor`, при сбое — безопасный 502 через контроллер. |
 | `getJobResult(string $user, string $jobId, ?string $requestId = null): array` | `GET /api/v1/jobs/{id}/result` | Только по UUID выбранного job. Возвращает HTTP-статус и нормализованное тело; при техническом сбое — безопасный 502 через контроллер. |
-| `getStatus(string $id): array` | `GET /api/v1/inputs/{id}` (**ЗАРЕЗЕРВИРОВАНО**) | Заготовка под будущий поллинг статуса/результата по `process_id`/`input_id`. В Шаге 2 реализуется как метод-заглушка (выбрасывает `RuntimeException` или возвращает структуру-заглушку), не экспонируется во фронтенд до отдельного согласования. |
+| `getStatus(string $id): array` | Нет (**ЗАРЕЗЕРВИРОВАНО**) | Заглушка под будущий поллинг. Во фронтенд не экспонируется. |
 
 Сигнатуры фиксированы настоящим документом; изменения — только через согласование
 в режиме `plan`.
 
 ### 4.5. Контракты backend API
 
-`POST /api/v1/inputs`:
+`GET /api/v1/actions`: активные пары передаются в порядке backend; `[]` —
+пустой каталог. AJAX-конверт содержит `actions` и `request_id`, ответ не кэшируется.
 
-- Запрос: `source=dokuwiki`; payload зависит от инструмента:
-  - `echo-test`: `{"tool":"echo-test","message":"<string>"}`
-  - `yt-dlp`: `{"tool":"yt-dlp","url":"https://example.org/video"}`
-  - `fabric`: `{"tool":"fabric","text":"<string>","pattern":"summarize"}`
-  BFF по-прежнему принимает `message`; для fabric добавлено необязательное поле
-  `pattern`, отсутствующее означает `summarize`. Пустое/нестроковое значение
-  отклоняется; имя соответствует `[A-Za-z0-9_-]{1,128}`.
-  Нерелевантные поля не отправляются, текст echo/fabric сохраняется без trim.
-  URL — абсолютный HTTP/HTTPS с host (не гарантия защиты от SSRF).
+`POST /api/v1/actions`:
+
+- AJAX `action=submit` читает `action_name`, положительную десятичную `version`
+  и текст JSON-значения `data`. Старые `tool/message` не поддерживаются.
+- Backend получает `{action,version,data}`; `source` отсутствует в оболочке.
+  JSON-значение передаётся без повторной сериализации. Поля специальных форм
+  собирают `{message}`, `{url}` или `{text,pattern}` для соответствующей пары v1.
 - Ответ `201 Created`: `{"input_id":"<uuid>","process_id":"<uuid>","status":"new"}`
   UUID не ограничены v4 (поддерживается v7). Прямой HTTP 400 от backend →
   безопасный отказ `400 Input rejected` без передачи тела ответа. Другой код,
@@ -210,7 +208,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 1. Регистрацию хука `AJAX_CALL_UNKNOWN` (наследуя `\dokuwiki\Extension\ActionPlugin`).
 2. Проверку `call == 'plugin_petar'`.
-3. Маршрутизацию по параметру `action` (`readyz`/`jobs`/`job_result` только GET, `submit` только POST,
+3. Маршрутизацию по параметру `action` (`readyz`/`actions`/`jobs`/`job_result` только GET, `submit` только POST,
    иначе 405 с Allow). `status` и неизвестные действия → 404 без вызова backend.
 4. CSRF: `checkSecurityToken()` для каждого POST → `403` JSON при провале.
 5. ACL: `$INPUT->server->str('REMOTE_USER')` непуст + `$USERINFO['grps']`
@@ -228,7 +226,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 ### `PetarClient.php` (сервисный слой)
 
-Содержит: всё сетевое взаимодействие, заголовки, белый список `tool`,
+Содержит: всё сетевое взаимодействие, заголовки, проверку оболочки отправки,
 парсинг/валидацию ответов backend, логирование ошибок.
 
 ### `syntax.php`
@@ -243,14 +241,15 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 ### `script.js` / `style.css`
 
 `script.js`: `fetch` к `DOKU_BASE + lib/exe/ajax.php` (`call=plugin_petar`,
-`action=readyz|submit|jobs|job_result`), отправка `sectok` только для submit, рендер результата. Полученные
+`action=readyz|actions|submit|jobs|job_result`), отправка `sectok` только для submit, рендер результата. Полученные
 `input_id` и `process_id` сохраняются в DOM-атрибуты контейнера результата:
 `data-input-id` и `data-process-id` (под будущий поллинг `status`).
 `style.css`: только стили, без логики.
 
 Каждый виджет имеет уникальные id и независимое состояние. Кнопка submit
-заблокирована уже в HTML и доступна только после успешной readiness.
-Форма переключает подписи/подсказки для message и показывает pattern для fabric.
+заблокирована уже в HTML и доступна только после readiness и загрузки непустого
+каталога. При ошибке каталога или readiness отправка заблокирована. Форма
+переключает поля по точной паре; неверный JSON не отправляется.
 Есть ручная перепроверка readiness; fetch ограничен 15 секундами через
 AbortController. Отмена ожидания не гарантирует отмену создания задания:
 автоматических повторов submit нет. Все UI-строки RU/EN передаются через

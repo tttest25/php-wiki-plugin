@@ -53,25 +53,42 @@
         var status = widget.querySelector('.petar-status');
         var result = widget.querySelector('.petar-result');
         var readiness = 'checking';
+        var actions = [];
         var submitting = false;
         var generation = 0;
 
         function updateState() {
             var state = submitting ? 'submitting' : readiness;
             widget.dataset.state = state;
-            submit.disabled = submitting || readiness !== 'ready';
+            submit.disabled = submitting || readiness !== 'ready' || !selected();
+            tool.disabled = submitting || readiness !== 'ready';
             form.setAttribute('aria-busy', submitting ? 'true' : 'false');
             status.textContent = strings[submitting ? 'status_busy' :
                 readiness === 'ready' ? 'status_ready' :
-                readiness === 'checking' ? 'status_checking' : 'err_backend'];
+                readiness === 'checking' ? 'status_checking' :
+                readiness === 'unavailable' ? 'err_backend' : readiness];
+        }
+
+        function selected() {
+            return tool.value === '' ? null : actions[Number(tool.value)];
+        }
+
+        function special(pair) {
+            if (!pair || pair.version !== 1) return 'json';
+            switch (pair.action) {
+                case 'yt-dlp': return 'url';
+                case 'fabric': return 'text';
+                case 'echo-test': return 'message';
+                default: return 'json';
+            }
         }
 
         function updateTool() {
-            var kind = tool.value === 'yt-dlp' ? 'url' : tool.value === 'fabric' ? 'text' : 'message';
+            var kind = special(selected());
             label.textContent = strings['label_' + kind];
             hint.textContent = strings['hint_' + kind];
             message.setAttribute('placeholder', strings['hint_' + kind]);
-            patternRow.hidden = tool.value !== 'fabric';
+            patternRow.hidden = kind !== 'text';
             pattern.disabled = patternRow.hidden;
             pattern.required = !patternRow.hidden;
         }
@@ -105,33 +122,75 @@
 
         async function checkReadiness() {
             var current = ++generation;
+            var previous = selected();
             readiness = 'checking';
             updateState();
             try {
                 var response = await request('readyz');
                 if (current !== generation) return;
-                readiness = response.ok && response.data && response.data.status === 'ready' ? 'ready' : 'unavailable';
+                if (!response.ok || !response.data || response.data.status !== 'ready') {
+                    readiness = 'unavailable';
+                    updateState();
+                    return;
+                }
+                readiness = 'catalog_loading';
+                updateState();
+                var catalog = await request('actions');
+                if (current !== generation) return;
+                if (!catalog.ok || !catalog.data || !Array.isArray(catalog.data.actions) ||
+                    !catalog.data.actions.every(function (pair) {
+                        return pair && typeof pair.action === 'string' && pair.action.trim() !== '' &&
+                            Number.isSafeInteger(pair.version) && pair.version > 0 && typeof pair.title === 'string';
+                    })) throw new Error('Invalid action catalog');
+                actions = catalog.data.actions;
+                tool.textContent = '';
+                actions.forEach(function (pair, index) {
+                    var option = document.createElement('option');
+                    option.value = String(index);
+                    option.textContent = pair.title + ' (' + pair.action + ' v' + pair.version + ')';
+                    tool.appendChild(option);
+                });
+                var index = previous ? actions.findIndex(function (pair) {
+                    return pair.action === previous.action && pair.version === previous.version;
+                }) : -1;
+                tool.value = actions.length ? String(index < 0 ? 0 : index) : '';
+                readiness = actions.length ? 'ready' : 'catalog_empty';
+                updateTool();
             } catch (_) {
                 if (current !== generation) return;
-                readiness = 'unavailable';
+                readiness = readiness === 'catalog_loading' ? 'catalog_error' : 'unavailable';
             }
             updateState();
         }
 
         form.addEventListener('submit', async function (event) {
             event.preventDefault();
-            if (submitting || readiness !== 'ready') return;
-            submitting = true;
-            updateState();
+            var pair = selected();
+            if (submitting || readiness !== 'ready' || !pair) return;
+            var kind = special(pair);
+            var dataJson;
             result.removeAttribute('data-input-id');
             result.removeAttribute('data-process-id');
+            if (kind === 'json') {
+                dataJson = message.value;
+                try { JSON.parse(dataJson); } catch (_) {
+                    showResult(strings.err_invalid_json, 'error');
+                    return;
+                }
+            } else {
+                var data = {};
+                data[kind] = message.value;
+                if (kind === 'text') data.pattern = pattern.value;
+                dataJson = JSON.stringify(data);
+            }
+            submitting = true;
+            updateState();
             showResult(strings.status_busy, 'loading');
             var body = new URLSearchParams();
             body.append('sectok', form.querySelector('[name="sectok"]').value);
-            body.append('tool', tool.value);
-            body.append('message', message.value);
-            body.append('action', 'submit');
-            if (tool.value === 'fabric') body.append('pattern', pattern.value);
+            body.append('action_name', pair.action);
+            body.append('version', String(pair.version));
+            body.append('data', dataJson);
             try {
                 var response = await request('submit', body);
                 var data = response.data;
