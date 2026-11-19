@@ -151,7 +151,7 @@ final class syntax_plugin_petar extends SyntaxPlugin
         $strings = [];
         foreach (['loading', 'empty', 'error', 'pending', 'dispatched', 'in_progress', 'completed', 'failed',
             'result_open', 'result_loading', 'result_not_ready', 'result_failed', 'result_missing',
-            'result_unavailable', 'result_error'] as $key) {
+            'result_unavailable', 'result_error', 'result_show_json', 'result_hide_json'] as $key) {
             $strings[$key] = $this->getLang('jobs_' . $key);
         }
         $ui = hsc(json_encode($strings, JSON_THROW_ON_ERROR));
@@ -176,7 +176,11 @@ final class syntax_plugin_petar extends SyntaxPlugin
         foreach ($fields as $field => $key) {
             $html .= '<dt>' . hsc($this->getLang($key)) . '</dt><dd data-job-field="' . $field . '"></dd>';
         }
-        $html .= '</dl><p class="petar-job-status" role="status"></p><pre class="petar-job-public" hidden></pre></article></section>';
+        $html .= '</dl><p class="petar-job-status" role="status"></p>';
+        $html .= '<pre class="petar-job-special" hidden></pre>';
+        $html .= '<button type="button" class="button petar-job-json-toggle" hidden aria-expanded="false" aria-controls="' . $id . '-public">'
+            . hsc($strings['result_show_json']) . '</button>';
+        $html .= '<pre id="' . $id . '-public" class="petar-job-public" hidden></pre></article></section>';
         return $html;
     }
 

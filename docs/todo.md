@@ -327,4 +327,9 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
   **Проверки:** `TestActionsCatalog` RED → GREEN, `QUALITY GATE PASSED`, Chromium `ACCEPTANCE PASSED`, независимый review — PASS, Human Sign-off получен.
   **Коммит:** `feat: submit catalog actions through the universal BFF`.
 
-- [ ] **PHP-07: Специальное представление или JSON.** Выбирать представление по типу/версии результата, иначе показывать форматированный публичный JSON как текст; исходный JSON доступен и для специальной карточки. Приёмка: после PHP-05 проверен fallback на фикстуре; после PHP-06 и T27 браузерный word-count работает без специальной формы/карточки. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
+- [x] **PHP-07: Специальное представление или JSON.** `echo-test` v1 показывает результат как текст с доступным публичным JSON; остальные допустимые результаты — форматированный JSON сразу. Приёмка: EN/RU и fixture Chromium подтверждают выбор пары, безопасный вывод и сброс; реальный T27 в изоляции — `word-count` из каталога через универсальную форму до `words: 3` по job UUID. План: [.opencode/tasks/php_07_result_presentations.md](../.opencode/tasks/php_07_result_presentations.md).
+  **Файлы:** `script.js`, `syntax.php`, `lang/{en,ru}/lang.php`,
+  `tests/contract/{ui_test.go,ui_behavior.js}`, `tests/acceptance/{fixture.js,smoke.spec.js}`,
+  `docs/todo.md`, `.opencode/tasks/php_07_result_presentations.md`.
+  **Проверки:** `TestJobResultPresentations` RED → GREEN (три итерации), quality gate, fixture Chromium, отдельный Chromium E2E на T27 `f726cc4d2a28082f5c4add354c7f70bbbf4eb845` и независимый review — PASS. Human Sign-off получен.
+  **Коммит:** `feat: render typed public results with JSON fallback`.

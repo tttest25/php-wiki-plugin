@@ -269,7 +269,7 @@ async function run(locale) {
         assert.equal(r.options.credentials, 'same-origin');
     }
 }
-async function runJobs(locale) {
+function setupJobs(locale) {
     const document = parse(rendered[locale].html), requests = [];
     document.createElement = tag => new Element(tag);
     const context = {
@@ -288,9 +288,20 @@ async function runJobs(locale) {
         list: w.querySelector('tbody'), more: w.querySelector('.petar-jobs-more'),
         refresh: w.querySelector('.petar-jobs-refresh'),
         card: w.querySelector('.petar-job-card'), close: w.querySelector('.petar-job-close'),
-        result: w.querySelector('pre'), cardStatus: w.querySelector('.petar-job-status')
+        result: w.querySelector('.petar-job-public'), cardStatus: w.querySelector('.petar-job-status'),
+        special: w.querySelector('.petar-job-special'), toggle: w.querySelector('.petar-job-json-toggle')
     });
     const [a, b] = document.querySelectorAll('[data-petar-jobs]').map(parts);
+    const replyCard = async (req, status, data) => {
+        req.resolve({ok: status >= 200 && status < 300, status, headers: {get: () => null}, json: async () => data});
+        await flush();
+    };
+    const answer = (req, rows, cursor = null, code = 200) =>
+        replyCard(req, code, {jobs: rows, next_cursor: cursor, error: 'SECRET_ERROR'});
+    return {context, requests, jobs, a, b, replyCard, answer};
+}
+async function runJobs(locale) {
+    const {context, requests, jobs, a, b, replyCard, answer} = setupJobs(locale);
     const s = rendered[locale].strings;
     const checkURL = (r, status, cursor) => {
         const expected = '/wiki/lib/exe/ajax.php?call=plugin_petar&action=jobs' +
@@ -302,11 +313,6 @@ async function runJobs(locale) {
     };
     const row = tool => ({job_id: 'job', process_id: 'process', tool, status: 'completed',
         created_at: 'created', updated_at: 'updated', payload: 'SECRET_PAYLOAD'});
-    const answer = async (req, rows, cursor = null, code = 200) => {
-        req.resolve({ok: code === 200, status: code, headers: {get: () => null},
-            json: async () => ({jobs: rows, next_cursor: cursor, error: 'SECRET_ERROR'})});
-        await flush();
-    };
     const cursor = '019b2c5d-1234-7000-8000-000000000001';
     checkURL(jobs[0]); checkURL(jobs[1]);
     assert.equal(a.status.textContent, s.jobs_loading);
@@ -389,10 +395,6 @@ async function runJobs(locale) {
         assert(!req.options.body);
         return req;
     };
-    const replyCard = async (req, status, data) => {
-        req.resolve({ok: status >= 200 && status < 300, status, headers: {get: () => null}, json: async () => data});
-        await flush();
-    };
     const publication = (job, marker) => ({job_id: job.job_id, result: {type: 'echo', version: 1, data: {marker}}});
     const pendingA = open(openA, first), pendingB = open(openB, second);
     assert(!a.card.hidden && b.card.hidden);
@@ -454,8 +456,123 @@ async function runJobs(locale) {
         assert.equal(requests.length, count, 'ACL denial must not fetch');
     }
 }
+async function runPresentations(locale) {
+    const {requests, jobs, a, b, answer, replyCard} = setupJobs(locale);
+    const first = {job_id: '019b2c5d-1234-7000-8000-000000000001', process_id: 'process',
+        tool: 'echo-test', status: 'completed', created_at: 'created', updated_at: 'updated'};
+    const second = {...first, job_id: '019b2c5d-1234-7000-8000-000000000002', tool: 'word-count'};
+    const failed = {...first, job_id: '019b2c5d-1234-7000-8000-000000000003', status: 'failed'};
+    const echo = '<img src=x onerror=evil()>\nвторая строка';
+    const result = {type: 'echo-test', version: 1, data: {echo}};
+    const rows = [first, second, failed];
+    const open = (widget, index = 0) => {
+        widget.list.querySelectorAll('button')[index].fire('click');
+        return requests.at(-1);
+    };
+    const publish = (req, job, result) => replyCard(req, 200, {job_id: job.job_id, result});
+    await answer(jobs[0], rows);
+    await answer(jobs[1], [second]);
+    await publish(open(a), first, result);
+    assert(a.special, 'missing .petar-job-special');
+    assert(!a.special.hidden);
+    assert.equal(a.special.textContent, echo);
+    assert(!a.special.querySelector('img'));
+    assert(a.result.hidden);
+    assert(a.toggle && !a.toggle.hidden);
+    const show = locale === 'en' ? 'Show JSON' : 'Показать JSON';
+    const hide = locale === 'en' ? 'Hide JSON' : 'Скрыть JSON';
+    assert.equal(a.toggle.textContent, show);
+    assert.equal(a.toggle.getAttribute('type'), 'button');
+    for (const widget of [a, b]) {
+        const id = widget.result.getAttribute('id');
+        assert(id);
+        assert.equal(widget.toggle.getAttribute('aria-controls'), id);
+    }
+    assert.notEqual(a.result.getAttribute('id'), b.result.getAttribute('id'));
+    const count = requests.length;
+    assert.equal(a.toggle.getAttribute('aria-expanded'), 'false');
+    a.toggle.fire('click');
+    assert(!a.result.hidden, 'JSON toggle must reveal the public document');
+    assert.equal(a.result.textContent, JSON.stringify(result, null, 2));
+    assert(!a.special.hidden);
+    assert.equal(a.toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(a.toggle.textContent, hide);
+    a.toggle.fire('click');
+    assert(a.result.hidden);
+    assert(!a.special.hidden);
+    assert.equal(a.toggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(a.toggle.textContent, show);
+    assert.equal(requests.length, count, 'JSON toggle must not fetch');
+
+    for (const fallback of [
+        {type: 'word-count', version: 1, data: {words: 3}},
+        {...result, type: 'unregistered'},
+        {...result, version: 2}, // JS-only; BFF rejects v2.
+        {...result, version: '1'},
+        {...result, data: {echo: 42}},
+    ]) {
+        await publish(open(a), first, fallback);
+        assert(!a.result.hidden && a.special.hidden && a.toggle.hidden);
+        assert.equal(a.result.textContent, JSON.stringify(fallback, null, 2));
+    }
+    await publish(open(a, 1), second, {...result, data: {echo: ''}});
+    assert(!a.special.hidden && !a.toggle.hidden && a.result.hidden,
+        'empty echo renders specially even when job.tool differs from result.type');
+    assert.equal(a.special.textContent, '');
+    await publish(open(b), second, {...result, data: {echo: 'other widget'}});
+    b.toggle.fire('click');
+    assert(a.result.hidden && !b.result.hidden, 'toggle affects only its journal');
+
+    const assertCleared = () => {
+        assert(a.special.hidden && a.result.hidden && a.toggle.hidden);
+        assert.equal(a.special.textContent, '');
+        assert.equal(a.result.textContent, '');
+        assert.equal(a.toggle.getAttribute('aria-expanded'), 'false', 'reset JSON disclosure');
+        assert.equal(a.toggle.textContent, show);
+    };
+    const showBoth = async () => {
+        await publish(open(a), first, result);
+        assert(a.result.hidden && !a.special.hidden);
+        a.toggle.fire('click');
+        assert(!a.result.hidden);
+    };
+    await showBoth();
+    const failure = open(a, 2);
+    assertCleared();
+    await replyCard(failure, 409, {error: 'job_failed'});
+    assert.equal(a.cardStatus.textContent, rendered[locale].strings.jobs_result_failed);
+    assertCleared();
+    await showBoth();
+    a.close.fire('click');
+    assert(a.card.hidden);
+    assertCleared();
+    for (const event of [
+        () => a.refresh.fire('click'),
+        () => { a.filter.value = 'completed'; a.filter.fire('change'); },
+    ]) {
+        await showBoth();
+        event();
+        assert(a.card.hidden);
+        assertCleared();
+        await answer(requests.at(-1), rows);
+        const stale = open(a);
+        event();
+        const page = requests.at(-1);
+        await publish(stale, first, result);
+        assert(a.card.hidden);
+        assertCleared();
+        await answer(page, rows);
+    }
+    const error = open(a);
+    assertCleared();
+    await replyCard(error, 502, {error: 'SECRET'});
+    assert.equal(a.cardStatus.textContent, rendered[locale].strings.jobs_result_error);
+    assertCleared();
+    assert(!b.card.hidden && !b.special.hidden && !b.result.hidden);
+    assert.equal(b.special.textContent, 'other widget');
+}
 (async () => {
-    const scenario = process.argv[3] === 'jobs' ? runJobs : run;
+    const scenario = {jobs: runJobs, presentations: runPresentations}[process.argv[3]] || run;
     await scenario('en'); await scenario('ru');
     console.log('UI behavior passed (EN/RU)');
 })().catch(e => { console.error(e); process.exitCode = 1; });

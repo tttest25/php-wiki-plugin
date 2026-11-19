@@ -22,7 +22,8 @@ const routes = new Map([
     ['/api/v1/jobs?limit=21', [200, jobs]],
     ['/api/v1/jobs?limit=21&status=completed', [200, jobs.slice(0, 2)]],
     ['/api/v1/jobs?limit=21&status=failed', [200, jobs.slice(2)]],
-    [resultPath(first), [200, publication('first-job-public')]],
+    [resultPath(first), [200, { type: 'echo-test', version: 1,
+        data: { echo: 'first-job-public <img src=x>\nsecond line' } }]],
     [resultPath(second), [200, publication('second-job-public')]],
     [resultPath(failed), [409, { error: 'job_failed' }]],
 ]);

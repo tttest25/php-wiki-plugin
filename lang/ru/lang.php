@@ -25,6 +25,8 @@ $lang['jobs_result_failed'] = 'Задание завершилось с ошиб
 $lang['jobs_result_missing'] = 'Задание не найдено.';
 $lang['jobs_result_unavailable'] = 'Публичный результат недоступен.';
 $lang['jobs_result_error'] = 'Не удалось загрузить результат задания.';
+$lang['jobs_result_show_json'] = 'Показать JSON';
+$lang['jobs_result_hide_json'] = 'Скрыть JSON';
 
 $lang['btn_submit'] = 'Отправить';
 $lang['err_forbidden'] = 'Доступ запрещен. Требуется авторизация и принадлежность к группе @ai или @admin.';

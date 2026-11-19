@@ -224,6 +224,10 @@ func TestJobsUIBehavior(t *testing.T) {
 	runUIBehavior(t, "jobs")
 }
 
+func TestJobResultPresentations(t *testing.T) {
+	runUIBehavior(t, "presentations")
+}
+
 func runUIBehavior(t *testing.T, mode string) {
 	t.Helper()
 	out, _ := renderUI(t)

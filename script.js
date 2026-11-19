@@ -226,6 +226,12 @@
         checkReadiness();
     }
 
+    var resultRenderers = [
+        {type: 'echo-test', version: 1, render: function (data) {
+            return data && typeof data.echo === 'string' ? data.echo : null;
+        }}
+    ];
+
     function initializeJobs(widget) {
         if (widget.dataset.initialized) return;
         widget.dataset.initialized = 'true';
@@ -240,6 +246,8 @@
         var close = card.querySelector('.petar-job-close');
         var cardStatus = card.querySelector('.petar-job-status');
         var publication = card.querySelector('.petar-job-public');
+        var special = card.querySelector('.petar-job-special');
+        var jsonToggle = card.querySelector('.petar-job-json-toggle');
         var cardFields = card.querySelectorAll('[data-job-field]');
         var selection = 0;
         var opener = null;
@@ -259,12 +267,21 @@
             return key === 'status' ? strings[job.status] : job[key];
         }
 
+        function setJSONExpanded(expanded) {
+            publication.hidden = !expanded;
+            jsonToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            jsonToggle.textContent = expanded ? strings.result_hide_json : strings.result_show_json;
+        }
+
         function closeCard(restoreFocus) {
             ++selection;
             card.hidden = true;
             cardStatus.textContent = '';
             publication.textContent = '';
-            publication.hidden = true;
+            setJSONExpanded(false);
+            special.textContent = '';
+            special.hidden = true;
+            jsonToggle.hidden = true;
             cardFields.forEach(function (field) { field.textContent = ''; });
             if (opener) {
                 opener.setAttribute('aria-expanded', 'false');
@@ -289,8 +306,18 @@
                 if (current !== selection) return;
                 var data = response.data || {};
                 if (response.status === 200 && data.job_id === job.job_id && data.result) {
+                    var renderer = resultRenderers.find(function (entry) {
+                        return entry.type === data.result.type && entry.version === data.result.version;
+                    });
+                    var text = renderer ? renderer.render(data.result.data) : null;
                     publication.textContent = JSON.stringify(data.result, null, 2);
-                    publication.hidden = false;
+                    if (text === null) {
+                        publication.hidden = false;
+                    } else {
+                        special.textContent = text;
+                        special.hidden = false;
+                        jsonToggle.hidden = false;
+                    }
                     cardStatus.textContent = '';
                 } else if (response.status === 202 && ['pending', 'dispatched', 'in_progress'].includes(data.status)) {
                     cardStatus.textContent = strings.result_not_ready;
@@ -371,6 +398,9 @@
 
         filter.addEventListener('change', function () { load(false); });
         close.addEventListener('click', function () { closeCard(true); });
+        jsonToggle.addEventListener('click', function () {
+            if (!jsonToggle.hidden) setJSONExpanded(publication.hidden);
+        });
         refresh.addEventListener('click', function () { load(false); });
         more.addEventListener('click', function () { load(true); });
         load(false);
