@@ -35,6 +35,7 @@ func TestRepositoryIgnoreRules(t *testing.T) {
 		{"cpu.out", true}, {"mem.out", true}, {"coverage.html", true},
 		{"file:Zone.Identifier", true}, {".DS_Store", true}, {"Thumbs.db", true},
 		{".vscode/settings.json", true}, {".idea/workspace.xml", true},
+		{".playwright-mcp/trace.zip", true}, {"docs/.playwright-mcp/example.md", false},
 		{"spool/processing/job.json", true}, {"spool/processing/.gitkeep", false},
 		{"PetarClient.php", false}, {"script.js", false}, {"style.css", false},
 		{"docs/todo.md", false}, {"tests/contract/gitignore_test.go", false},

@@ -12,6 +12,7 @@ coverage.html
 # Локальные данные OpenCode; контракт агента остаётся в Git
 /.opencode/*
 !/.opencode/rules.md
+/.playwright-mcp/
 
 # Логи
 *.log

@@ -282,6 +282,15 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
 **Проверки:** `QUALITY GATE PASSED`; независимое review — PASS; Human Sign-off получен.
 **Коммит:** `chore: add plugin quality gate`.
 
+## Служебный шаг — ручная отладка Playwright и локальные артефакты [x]
+
+**Файлы:** `docs/rules.md`, `.gitignore`, `tests/contract/gitignore_test.go`,
+`docs/todo.md`. Отдельная dev‑DokuWiki рекомендована для ручной отладки;
+изолированная автоматическая приёмка по-прежнему не требует Playwright MCP.
+Корневой `.playwright-mcp/` игнорируется, его содержимое не входит в коммит.
+**Проверки:** регрессионный тест RED → GREEN, `QUALITY GATE PASSED`.
+**Коммит:** `docs: clarify manual Playwright debugging and automated acceptance`.
+
 ## Журнал выполненных шагов
 
 | Шаг | Коммит | Дата | Примечания |
