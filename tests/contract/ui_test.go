@@ -192,9 +192,14 @@ echo json_encode($out);
 			}
 			for _, journal := range journals {
 				form := forms[0]
+				markup := view.HTML[journal[0]:journal[1]]
 				if form[0] < journal[1] && journal[0] < form[1] ||
-					strings.Contains(view.HTML[journal[0]:journal[1]], "sectok") {
+					strings.Contains(markup, "sectok") {
 					t.Fatal("journal must not contain or overlap the submit form/token")
+				}
+				if !regexp.MustCompile(`class="petar-job-card" hidden aria-labelledby="[^"]+"`).MatchString(markup) ||
+					!strings.Contains(markup, `<tbody></tbody>`) {
+					t.Fatal("expected a hidden labelled card and no initial rows or result buttons")
 				}
 			}
 			ids := map[string]bool{}

@@ -314,7 +314,13 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
 
 - [x] **PHP-04: Общий журнал `{{petar>jobs}}`.** Сохранить `{{petar}}` как форму; одна строка журнала — один job. Приёмка: оба макроса работают на одной странице; ai/admin видят общий список с пятью статусами, курсором, «Ещё», «Обновить», пустым состоянием и ошибкой; без ACL данные не выдаются, браузер не обращается к backend напрямую. Использует существующий `GET /api/v1/jobs`, не зависит от T22–T27. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md). Коммит: `feat: add shared petar jobs journal`.
 
-- [ ] **PHP-05: Карточка завершённого задания.** Открывать completed/failed из строки без потери фильтра; показывать job/process ID, инструмент, итог и даты, публичный результат/сообщение по контракту T26. Приёмка: карточка соответствует выбранному job, артефакт соседнего задания не подставляется. Для завершения нужны PHP-04 и T26. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
+- [x] **PHP-05: Карточка завершённого задания.** Из completed/failed открыть карточку по job UUID без сброса фильтра; приёмка: два job одного процесса показывают каждый свой публичный результат, failed — безопасное сообщение, старый ответ не подменяет выбор. Зависимости PHP-04/T26 выполнены. План: [.opencode/tasks/php_05_job_result_card.md](../.opencode/tasks/php_05_job_result_card.md).
+  **Файлы:** `PetarClient.php`, `action.php`, `syntax.php`, `script.js`,
+  `lang/{en,ru}/lang.php`, `tests/contract/{action,client,ui}_test.go`,
+  `tests/contract/ui_behavior.js`, `tests/acceptance/{fixture,smoke.spec}.js`,
+  `docs/{architecture,todo}.md`, `.opencode/tasks/php_05_job_result_card.md`.
+  **Проверки:** RED → GREEN, `QUALITY GATE PASSED`, Chromium `ACCEPTANCE PASSED`, независимый review — PASS.
+  **Коммит:** `feat: show public results for selected journal jobs`.
 
 - [ ] **PHP-06: Динамический каталог и универсальная форма.** Выбирать действие/версию через BFF, сохранять специальные формы, для прочих давать ввод JSON. Приёмка: неверный JSON не отправляется, правила действия проверяет БД; новое действие не требует правки PHP/JS. Зависит от T23/T24. План: [docs/php_wiki_jobs_roadmap.md](php_wiki_jobs_roadmap.md).
 

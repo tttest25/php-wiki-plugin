@@ -33,6 +33,7 @@ class Logger { public static $messages = []; public static function error(...$ar
 namespace dokuwiki\HTTP {
 class DokuHTTPClient {
     public $timeout, $status = 201, $resp_body, $error = '', $headers = [], $max_redirect = 5, $debug = true;
+    public $keep_alive = true, $max_bodysize = 0;
     public static $code = 201, $body = '{"input_id":"019b2c5d-1234-7000-8000-123456789abc","process_id":"019b2c5d-1234-7000-8000-123456789abd","status":"new"}', $ok = true, $sent;
     public function sendRequest($url, $body, $method) {
         self::$sent = ['url'=>$url, 'body'=>json_decode($body,true), 'raw_body'=>$body, 'method'=>$method,

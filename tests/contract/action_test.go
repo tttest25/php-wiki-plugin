@@ -19,7 +19,7 @@ namespace dokuwiki\Extension {
 class ActionPlugin {
     public function getConf($key) {
         if (($GLOBALS['case']['badconfig'] ?? false) && $key === 'petar_url') return '';
-        return ['petar_url'=>'http://backend','api_secret'=>'','timeout'=>15][$key];
+        return ['petar_url'=>'http://backend','api_secret'=>$GLOBALS['case']['secret'] ?? '','timeout'=>15][$key];
     }
 }
 class Event {
@@ -59,7 +59,7 @@ $USERINFO = ['grps'=>$case['groups'] ?? ['ai']];
 ob_start();
 register_shutdown_function(function() {
  $body = ob_get_clean();
- echo json_encode(['code'=>http_response_code(),'body'=>json_decode($body,true),
+ echo json_encode(['code'=>http_response_code(),'body'=>json_decode($body),
      'sent'=>\dokuwiki\HTTP\DokuHTTPClient::$sent,'logs'=>\dokuwiki\Logger::$messages]);
 });
 $event = new \dokuwiki\Extension\Event();
@@ -69,6 +69,129 @@ $event->data = $case['call'] ?? 'plugin_petar';
 }
 
 func base64Fixture(raw []byte) string { return base64.StdEncoding.EncodeToString(raw) }
+
+func TestJobResultAction(t *testing.T) {
+	t.Run("selected_job", func(t *testing.T) {
+		id := jobsID(2)
+		got := actionPHP(t, map[string]interface{}{
+			"action": "job_result", "method": "GET", "request_id": directRequestID,
+			"get":          map[string]interface{}{"job_id": id, "process_id": jobsID(500)},
+			"post":         map[string]interface{}{"job_id": jobsID(1)},
+			"backend_code": 200, "backend_body": `{"type":"echo","version":1,"data":{"marker":"second-job"}}`,
+		})
+		want := map[string]interface{}{
+			"job_id": id, "request_id": directRequestID,
+			"result": map[string]interface{}{"type": "echo", "version": float64(1), "data": map[string]interface{}{"marker": "second-job"}},
+		}
+		if got["code"] != float64(200) || !reflect.DeepEqual(got["body"], want) {
+			t.Fatalf("expected HTTP 200 for selected job %s, got %#v", id, got)
+		}
+		sent := got["sent"].(map[string]interface{})
+		if sent["method"] != "GET" || sent["raw_body"] != "" ||
+			sent["url"] != "http://backend/api/v1/jobs/"+id+"/result" ||
+			sent["max_redirect"] != float64(0) || sent["debug"] != false {
+			t.Fatalf("wrong upstream request: %#v", sent)
+		}
+		headers := sent["headers"].(map[string]interface{})
+		if headers["X-Request-ID"] != directRequestID || headers["X-Wiki-User"] != "wiki" || headers["X-API-Key"] != nil {
+			t.Fatalf("wrong upstream headers: %#v", headers)
+		}
+	})
+	request := func(t *testing.T, args map[string]interface{}) map[string]interface{} {
+		t.Helper()
+		args["action"] = "job_result"
+		if args["method"] == nil {
+			args["method"] = "GET"
+		}
+		return actionPHP(t, args)
+	}
+	t.Run("admin", func(t *testing.T) {
+		got := request(t, map[string]interface{}{"user": "admin-user", "groups": []string{"admin"}, "secret": "fixture-key",
+			"get": map[string]interface{}{"job_id": jobsID(2), "user": "forged"}, "backend_code": 200,
+			"backend_body": `{"type":"echo","version":1,"data":{}}`})
+		if got["code"] != float64(200) {
+			t.Fatalf("admin denied: %#v", got)
+		}
+		headers := got["sent"].(map[string]interface{})["headers"].(map[string]interface{})
+		if headers["X-Wiki-User"] != "admin-user" || headers["X-API-Key"] != "fixture-key" {
+			t.Fatalf("wrong upstream headers: %#v", headers)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		args map[string]interface{}
+		code int
+	}{
+		{"anonymous", map[string]interface{}{"user": ""}, 403},
+		{"ordinary", map[string]interface{}{"groups": []string{"user"}}, 403},
+		{"bad_csrf", map[string]interface{}{"method": "POST", "csrf": false}, 403},
+		{"post", map[string]interface{}{"method": "POST"}, 405},
+		{"missing", map[string]interface{}{"post": map[string]interface{}{"job_id": jobsID(2)}}, 400},
+		{"array", map[string]interface{}{"get": map[string]interface{}{"job_id": []string{jobsID(2)}}}, 400},
+		{"invalid_id", map[string]interface{}{"get": map[string]interface{}{"job_id": "not-uuid"}}, 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := request(t, tc.args)
+			if got["code"] != float64(tc.code) || got["sent"] != nil ||
+				got["body"].(map[string]interface{})["request_id"] != directRequestID {
+				t.Fatalf("expected HTTP %d without upstream: %#v", tc.code, got)
+			}
+		})
+	}
+	const empty = `{"type":"echo","version":1,"data":{}}`
+	const capBytes = 1 << 20
+	for _, tc := range []struct {
+		name, raw, key, value string
+		upstream, code        int
+		ok                    bool
+	}{
+		{"empty_object", empty, "", "", 200, 200, true},
+		{"at_limit", empty + strings.Repeat(" ", capBytes-len(empty)), "", "", 200, 200, true},
+		{"over_limit", empty + strings.Repeat(" ", capBytes-len(empty)+1), "error", "Backend request failed", 200, 502, true},
+		{"pending", `{"status":"pending","diagnostic":"SECRET"}`, "status", "pending", 202, 202, true},
+		{"dispatched", `{"status":"dispatched"}`, "status", "dispatched", 202, 202, true},
+		{"in_progress", `{"status":"in_progress"}`, "status", "in_progress", 202, 202, true},
+		{"failed", `{"error":"job_failed","diagnostic":"SECRET"}`, "error", "job_failed", 409, 409, true},
+		{"missing_job", `{"error":"SECRET"}`, "error", "job_not_found", 404, 404, true},
+		{"unavailable", `{"error":"result_unavailable"}`, "error", "result_unavailable", 410, 410, true},
+		{"bad_status", `{"status":"failed"}`, "error", "Backend request failed", 202, 502, true},
+		{"wrong_conflict", `{"error":"SECRET"}`, "error", "Backend request failed", 409, 502, true},
+		{"wrong_gone", `{"error":"SECRET"}`, "error", "Backend request failed", 410, 502, true},
+		{"extra_field", `{"type":"echo","version":1,"data":{},"diagnostic":"SECRET"}`, "error", "Backend request failed", 200, 502, true},
+		{"missing_type", `{"version":1,"data":{}}`, "error", "Backend request failed", 200, 502, true},
+		{"empty_type", `{"type":"","version":1,"data":{}}`, "error", "Backend request failed", 200, 502, true},
+		{"bad_version", `{"type":"echo","version":2,"data":{}}`, "error", "Backend request failed", 200, 502, true},
+		{"array_data", `{"type":"echo","version":1,"data":[]}`, "error", "Backend request failed", 200, 502, true},
+		{"partial", `{"type":"echo","version":1,"data":{`, "error", "Backend request failed", 200, 502, true},
+		{"redirect", empty, "error", "Backend request failed", 302, 502, false},
+		{"too_large_upstream", `{"error":"result_too_large"}`, "error", "Backend request failed", 500, 502, false},
+		{"timeout", `{"error":"SECRET"}`, "error", "Backend request failed", 504, 502, false},
+		{"transport", empty, "error", "Backend request failed", 0, 502, false},
+		{"interrupted_200", empty, "error", "Backend request failed", 200, 502, false},
+		{"interrupted_404", "", "error", "Backend request failed", 404, 502, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := request(t, map[string]interface{}{
+				"get": map[string]interface{}{"job_id": jobsID(2)}, "backend_code": tc.upstream,
+				"backend_body": tc.raw, "backend_ok": tc.ok,
+			})
+			want := map[string]interface{}{"request_id": directRequestID}
+			if tc.code == 200 {
+				want["job_id"] = jobsID(2)
+				want["result"] = map[string]interface{}{"type": "echo", "version": float64(1), "data": map[string]interface{}{}}
+			} else {
+				want[tc.key] = tc.value
+				if tc.code == 502 {
+					want["success"] = false
+				}
+			}
+			if got["code"] != float64(tc.code) || !reflect.DeepEqual(got["body"], want) ||
+				strings.Contains(fmt.Sprint(got["logs"]), "SECRET") || got["sent"] == nil {
+				t.Fatalf("expected HTTP %d with %#v, got %#v", tc.code, want, got)
+			}
+		})
+	}
+}
 
 func TestJobsAction(t *testing.T) {
 	trace := regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -288,6 +411,10 @@ if (($_GET['action'] ?? '') === 'jobs') {
  \dokuwiki\HTTP\DokuHTTPClient::$code = 200;
  \dokuwiki\HTTP\DokuHTTPClient::$body = '[]';
 }
+if (($_GET['action'] ?? '') === 'job_result') {
+ \dokuwiki\HTTP\DokuHTTPClient::$code = isset($_GET['missing_job']) ? 404 : 200;
+ \dokuwiki\HTTP\DokuHTTPClient::$body = '{"type":"echo","version":1,"data":{}}';
+}
 if (($_GET['action'] ?? '') === 'readyz') {
  \dokuwiki\HTTP\DokuHTTPClient::$code = 200;
  \dokuwiki\HTTP\DokuHTTPClient::$body = '{"status":"ready"}';
@@ -339,6 +466,11 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 		{"?action=jobs&backend_fail=1", "GET", "", "", 502},
 		{"?action=jobs&anon=1", "GET", "", "invalid", 403},
 		{"?action=jobs", "POST", "", "", 405},
+		{"?action=job_result&job_id=" + jobsID(2), "GET", "", directRequestID, 200},
+		{"?action=job_result&job_id=" + jobsID(2) + "&missing_job=1", "GET", "", "", 404},
+		{"?action=job_result&job_id[]=" + jobsID(2), "GET", "", "", 400},
+		{"?action=job_result&job_id=" + jobsID(2) + "&badcsrf=1", "POST", "", "", 403},
+		{"?action=job_result&job_id=" + jobsID(2), "POST", "", "", 405},
 	} {
 		t.Run(fmt.Sprintf("%s/%s/%s", tc.method, tc.query, tc.data), func(t *testing.T) {
 			// Arguments are separate argv; query is supplied via the shell environment.
@@ -371,7 +503,7 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 			}
 			if tc.code == 405 {
 				want := "POST"
-				if strings.HasPrefix(tc.query, "?action=jobs") {
+				if strings.HasPrefix(tc.query, "?action=jobs") || strings.HasPrefix(tc.query, "?action=job_result") {
 					want = "GET"
 				}
 				if resp.Header.Get("Allow") != want {
@@ -380,6 +512,10 @@ curl -sS -i "$@" http://127.0.0.1:19847/"$query"
 			}
 			if tc.query == "?action=jobs" && tc.code == 200 && resp.Header.Get("Cache-Control") != "no-store" {
 				t.Fatal("missing Cache-Control: no-store")
+			}
+			if strings.HasPrefix(tc.query, "?action=job_result") && tc.method == "GET" &&
+				resp.Header.Get("Cache-Control") != "no-store" {
+				t.Fatal("missing Cache-Control: no-store for result")
 			}
 			if strings.Contains(fmt.Sprint(body), "SECRET") {
 				t.Fatal("raw error leaked")

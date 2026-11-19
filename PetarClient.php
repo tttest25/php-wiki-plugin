@@ -19,6 +19,7 @@ final class PetarClient
     private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
     private const JOB_STATUSES = ['pending', 'dispatched', 'in_progress', 'completed', 'failed'];
     private const JOB_PAGE_SIZE = 20;
+    private const MAX_JOB_RESULT_BYTES = 1_048_576;
 
     private string $baseUrl;
     private string $apiSecret;
@@ -287,6 +288,60 @@ final class PetarClient
             $nextCursor = $jobs[self::JOB_PAGE_SIZE - 1]['job_id'];
         }
         return ['jobs' => $jobs, 'next_cursor' => $nextCursor];
+    }
+
+    /** Read the public result of one job, never of its process. */
+    public function getJobResult(string $user, string $jobId, ?string $requestId = null): array
+    {
+        if (!$this->isValidUuid($jobId)) {
+            throw new InvalidArgumentException('Invalid field: job_id');
+        }
+        $requestId ??= $this->generateUuidV4();
+        if (!$this->isValidUuidV4($requestId)) {
+            throw new InvalidArgumentException('Invalid request ID format (UUIDv4 expected)');
+        }
+
+        $client = $this->newDirectClient();
+        $client->debug = false;
+        $client->headers['Accept'] = 'application/json';
+        $client->headers['X-Request-ID'] = $requestId;
+        $client->headers['X-Wiki-User'] = str_replace(["\r", "\n"], '', $user);
+        if ($this->apiSecret !== '') {
+            $client->headers['X-API-Key'] = $this->apiSecret;
+        }
+        $url = $this->baseUrl . '/api/v1/jobs/' . $jobId . '/result';
+        $client->headers['Accept-encoding'] = 'identity';
+        $client->keep_alive = false;
+        $client->max_bodysize = self::MAX_JOB_RESULT_BYTES;
+        if (!$client->sendRequest($url, '', 'GET') || strlen($client->resp_body) > self::MAX_JOB_RESULT_BYTES) {
+            $this->failJobResult($requestId);
+        }
+        $status = (int)$client->status;
+        $body = json_decode($client->resp_body);
+        if ($status === 200 && $body instanceof \stdClass && count(get_object_vars($body)) === 3 &&
+            is_string($body->type ?? null) && $body->type !== '' && ($body->version ?? null) === 1 &&
+            ($body->data ?? null) instanceof \stdClass && json_encode($body) !== false) {
+            return ['http_status' => 200, 'data' => ['job_id' => $jobId, 'result' => $body]];
+        }
+        if ($status === 202 && in_array($body->status ?? null, ['pending', 'dispatched', 'in_progress'], true)) {
+            return ['http_status' => 202, 'data' => ['status' => $body->status]];
+        }
+        $error = match ($status) {
+            404 => 'job_not_found',
+            409 => ($body->error ?? null) === 'job_failed' ? 'job_failed' : null,
+            410 => ($body->error ?? null) === 'result_unavailable' ? 'result_unavailable' : null,
+            default => null,
+        };
+        if ($error !== null) {
+            return ['http_status' => $status, 'data' => ['error' => $error]];
+        }
+        $this->failJobResult($requestId);
+    }
+
+    private function failJobResult(string $requestId): never
+    {
+        Logger::error('petar', 'Job result request failed [req_id=' . $requestId . ']', __FILE__, __LINE__);
+        throw new RuntimeException('Backend request failed', 502);
     }
 
     private function newDirectClient(): DokuHTTPClient

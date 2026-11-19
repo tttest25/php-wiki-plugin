@@ -146,8 +146,18 @@ final class syntax_plugin_petar extends SyntaxPlugin
 
     private function renderJobs(string $id): string
     {
+        $fields = [
+            'job_id' => 'jobs_job_id',
+            'process_id' => 'label_process_id',
+            'tool' => 'label_tool',
+            'status' => 'label_status',
+            'created_at' => 'jobs_created_at',
+            'updated_at' => 'jobs_updated_at',
+        ];
         $strings = [];
-        foreach (['loading', 'empty', 'error', 'pending', 'dispatched', 'in_progress', 'completed', 'failed'] as $key) {
+        foreach (['loading', 'empty', 'error', 'pending', 'dispatched', 'in_progress', 'completed', 'failed',
+            'result_open', 'result_loading', 'result_not_ready', 'result_failed', 'result_missing',
+            'result_unavailable', 'result_error'] as $key) {
             $strings[$key] = $this->getLang('jobs_' . $key);
         }
         $ui = hsc(json_encode($strings, JSON_THROW_ON_ERROR));
@@ -161,11 +171,18 @@ final class syntax_plugin_petar extends SyntaxPlugin
         $html .= '</select><button type="button" class="button petar-jobs-refresh">' . hsc($this->getLang('jobs_refresh')) . '</button></div>';
         $html .= '<p class="petar-jobs-status" role="status"></p><div class="petar-jobs-table" hidden>';
         $html .= '<table><thead><tr>';
-        foreach (['jobs_job_id', 'label_process_id', 'label_tool', 'label_status', 'jobs_created_at', 'jobs_updated_at'] as $key) {
+        foreach ($fields as $key) {
             $html .= '<th scope="col">' . hsc($this->getLang($key)) . '</th>';
         }
-        $html .= '</tr></thead><tbody></tbody></table></div>';
-        $html .= '<button type="button" class="button petar-jobs-more" hidden>' . hsc($this->getLang('jobs_more')) . '</button></section>';
+        $html .= '<th scope="col">' . hsc($this->getLang('jobs_result_title')) . '</th></tr></thead><tbody></tbody></table></div>';
+        $html .= '<button type="button" class="button petar-jobs-more" hidden>' . hsc($this->getLang('jobs_more')) . '</button>';
+        $html .= '<article id="' . $id . '-card" class="petar-job-card" hidden aria-labelledby="' . $id . '-card-title">';
+        $html .= '<h4 id="' . $id . '-card-title">' . hsc($this->getLang('jobs_result_title')) . '</h4>';
+        $html .= '<button type="button" class="button petar-job-close">' . hsc($this->getLang('jobs_result_close')) . '</button><dl>';
+        foreach ($fields as $field => $key) {
+            $html .= '<dt>' . hsc($this->getLang($key)) . '</dt><dd data-job-field="' . $field . '"></dd>';
+        }
+        $html .= '</dl><p class="petar-job-status" role="status"></p><pre class="petar-job-public" hidden></pre></article></section>';
         return $html;
     }
 

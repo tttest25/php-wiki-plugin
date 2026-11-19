@@ -42,6 +42,7 @@ class Element {
     removeAttribute(k) { delete this.attrs[k]; if (k.startsWith('data-')) delete this.dataset[k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())]; }
     addEventListener(k, cb) { (this.events[k] ||= []).push(cb); }
     fire(k) { for (const cb of this.events[k] || []) cb({target: this, preventDefault() {}}); }
+    focus() { this.focused = true; }
     querySelectorAll(selector) {
         const matches = e => {
             const cls = selector.match(/^\.([\w-]+)$/);
@@ -226,7 +227,9 @@ async function runJobs(locale) {
     const parts = w => ({
         status: w.querySelector('.petar-jobs-status'), filter: w.querySelector('select'),
         list: w.querySelector('tbody'), more: w.querySelector('.petar-jobs-more'),
-        refresh: w.querySelector('.petar-jobs-refresh')
+        refresh: w.querySelector('.petar-jobs-refresh'),
+        card: w.querySelector('.petar-job-card'), close: w.querySelector('.petar-job-close'),
+        result: w.querySelector('pre'), cardStatus: w.querySelector('.petar-job-status')
     });
     const [a, b] = document.querySelectorAll('[data-petar-jobs]').map(parts);
     const s = rendered[locale].strings;
@@ -305,6 +308,84 @@ async function runJobs(locale) {
     assert.equal(b.status.textContent, s.jobs_empty, 'other widget untouched');
     assert.equal(b.list.children.length, 0);
     assert.equal(requests.filter(r => r.url.includes('action=readyz')).length, 2);
+
+    assert(a.card.hidden && b.card.hidden);
+    const first = {...row('first tool'), job_id: cursor};
+    const second = {...row('second tool'), job_id: '019b2c5d-1234-7000-8000-000000000002'};
+    const failed = {...row('failed tool'), status: 'failed', job_id: '019b2c5d-1234-7000-8000-000000000003'};
+    const active = {...row('active tool'), status: 'in_progress'};
+    a.filter.value = 'completed'; a.filter.fire('change');
+    await answer(requests.at(-1), [first, second, failed, active], cursor);
+    b.refresh.fire('click');
+    await answer(requests.at(-1), [first], cursor);
+    const buttons = a.list.querySelectorAll('button');
+    assert.equal(buttons.length, 3, 'only terminal jobs have buttons');
+    const [openA, openB, openFailed] = buttons;
+    const open = (button, job) => {
+        button.fire('click');
+        const req = requests.at(-1);
+        assert.equal(req.url, '/wiki/lib/exe/ajax.php?call=plugin_petar&action=job_result&job_id=' + job.job_id);
+        assert.equal(req.options.method, 'GET');
+        assert.equal(req.options.credentials, 'same-origin');
+        assert(!req.options.body);
+        return req;
+    };
+    const replyCard = async (req, status, data) => {
+        req.resolve({ok: status >= 200 && status < 300, status, headers: {get: () => null}, json: async () => data});
+        await flush();
+    };
+    const publication = (job, marker) => ({job_id: job.job_id, result: {type: 'echo', version: 1, data: {marker}}});
+    const pendingA = open(openA, first), pendingB = open(openB, second);
+    assert(!a.card.hidden && b.card.hidden);
+    assert.equal(a.cardStatus.textContent, s.jobs_result_loading);
+    const bRequest = open(b.list.querySelector('button'), first);
+    const marker = '<img src=x onerror=evil()>';
+    await replyCard(pendingB, 200, publication(second, marker));
+    await replyCard(pendingA, 200, publication(first, 'late A'));
+    assert.deepEqual(JSON.parse(a.result.textContent), publication(second, marker).result);
+    assert(!a.result.querySelector('img'));
+    for (const [key, value] of Object.entries(second)) {
+        if (key === 'payload') continue;
+        assert.equal(a.card.querySelector(`[data-job-field="${key}"]`).textContent,
+            key === 'status' ? s.jobs_completed : value);
+    }
+    const failedRequest = open(openFailed, failed);
+    assert(a.result.hidden && a.result.textContent === '', 'new selection clears old result immediately');
+    await replyCard(failedRequest, 409, {error: 'job_failed', diagnostic: 'SECRET'});
+    assert.equal(a.cardStatus.textContent, s.jobs_result_failed);
+    await replyCard(bRequest, 200, publication(first, 'independent'));
+    assert(b.result.textContent.includes('independent'));
+    for (const [code, body, text] of [
+        [202, {status: 'in_progress', result: 'SECRET'}, s.jobs_result_not_ready],
+        [404, {error: 'job_not_found'}, s.jobs_result_missing],
+        [410, {error: 'result_unavailable'}, s.jobs_result_unavailable],
+        [502, {error: 'SECRET'}, s.jobs_result_error],
+        [200, publication(first, 'mismatched job'), s.jobs_result_error]
+    ]) {
+        assert(text && text !== s.jobs_result_failed);
+        const req = open(openB, second);
+        await replyCard(req, code, body);
+        assert.equal(a.cardStatus.textContent, text);
+        assert(a.result.hidden && !a.card.textContent.includes('SECRET'));
+    }
+    const assertClosed = () => assert(a.card.hidden && a.result.hidden && a.result.textContent === '');
+    const closed = open(openB, second);
+    count = requests.length;
+    a.close.fire('click');
+    assert.equal(requests.length, count, 'close must not fetch');
+    assert.equal(a.filter.value, 'completed');
+    assert.equal(a.list.children.length, 4);
+    assert(!a.more.hidden && openB.focused);
+    await replyCard(closed, 200, publication(second, 'closed'));
+    assertClosed();
+    for (const [control, event, buttonIndex] of [[a.refresh, 'click', 1], [a.filter, 'change', 0]]) {
+        const late = open(a.list.querySelectorAll('button')[buttonIndex], second);
+        control.fire(event);
+        await replyCard(late, 200, publication(second, 'invalidated'));
+        assertClosed();
+        await answer(requests.at(-1), [second], cursor);
+    }
+    assert(!b.card.hidden && b.result.textContent.includes('independent'));
     for (const role of ['anonymous', 'ordinary']) {
         const denied = parse(rendered[role].html);
         assert(!denied.querySelector('[data-petar-jobs]'));

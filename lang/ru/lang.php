@@ -16,6 +16,15 @@ $lang['jobs_error'] = 'Не удалось загрузить задания. П
 $lang['jobs_job_id'] = 'ID задания';
 $lang['jobs_created_at'] = 'Создано';
 $lang['jobs_updated_at'] = 'Обновлено';
+$lang['jobs_result_title'] = 'Результат задания';
+$lang['jobs_result_open'] = 'Открыть результат';
+$lang['jobs_result_close'] = 'Закрыть результат';
+$lang['jobs_result_loading'] = 'Загрузка результата…';
+$lang['jobs_result_not_ready'] = 'Результат задания ещё не готов.';
+$lang['jobs_result_failed'] = 'Задание завершилось с ошибкой. Публичного результата нет.';
+$lang['jobs_result_missing'] = 'Задание не найдено.';
+$lang['jobs_result_unavailable'] = 'Публичный результат недоступен.';
+$lang['jobs_result_error'] = 'Не удалось загрузить результат задания.';
 
 $lang['btn_submit'] = 'Отправить';
 $lang['err_forbidden'] = 'Доступ запрещен. Требуется авторизация и принадлежность к группе @ai или @admin.';

@@ -39,6 +39,7 @@ action.php  (класс action_plugin_petar extends \dokuwiki\Extension\ActionPl
    │     readyz  → PetarClient::checkReadiness(requestId?)
     │     submit  → PetarClient::submitInput(tool, message, user, requestId?, pattern?)
    │     jobs    → PetarClient::listJobs(user, status?, cursor?, requestId?)
+   │     job_result → PetarClient::getJobResult(user, jobId, requestId?)
   │     status  → ЗАРЕЗЕРВИРОВАНО (будущий GET-поллинг; НЕ /api/v1/jobs/{id}/status)
   └── формирование JSON-ответа клиенту (+ X-Request-ID в ответ)
   ▼
@@ -51,6 +52,7 @@ backend petar_app (параметризованный URL)
   GET  /readyz          → 200 {"status":"ready"} | 503 {"status":"unavailable","error":"..."}
    POST /api/v1/inputs   → 201 {"input_id","process_id","status":"new"}
    GET  /api/v1/jobs    → 200 [job, ...]
+   GET  /api/v1/jobs/{id}/result → публичный результат или состояние задания
 ```
 
 Критические правила потока:
@@ -146,6 +148,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 | `checkReadiness(?string $requestId = null): array` | `GET /readyz` | Успех только при HTTP 200 и объекте с `status=ready`; возвращает нормализованный конверт. BFF отображает неготовность как 503 `status=unavailable`, без сырой ошибки backend. |
 | `submitInput(string $tool, string $message, string $user, ?string $requestId = null, ?string $pattern = null): array` | `POST /api/v1/inputs` | Маппинг канонического payload выполняется только в клиенте. Возвращает конверт `success,http_status,request_id,data,error`; `data` содержит проверенные UUID input/process и `status=new`. |
 | `listJobs(string $user, ?string $status = null, ?string $cursor = null, ?string $requestId = null): array` | `GET /api/v1/jobs` | Общая страница без фильтра по пользователю. Возвращает `jobs` и `next_cursor`, при сбое — безопасный 502 через контроллер. |
+| `getJobResult(string $user, string $jobId, ?string $requestId = null): array` | `GET /api/v1/jobs/{id}/result` | Только по UUID выбранного job. Возвращает HTTP-статус и нормализованное тело; при техническом сбое — безопасный 502 через контроллер. |
 | `getStatus(string $id): array` | `GET /api/v1/inputs/{id}` (**ЗАРЕЗЕРВИРОВАНО**) | Заготовка под будущий поллинг статуса/результата по `process_id`/`input_id`. В Шаге 2 реализуется как метод-заглушка (выбрасывает `RuntimeException` или возвращает структуру-заглушку), не экспонируется во фронтенд до отдельного согласования. |
 
 Сигнатуры фиксированы настоящим документом; изменения — только через согласование
@@ -187,6 +190,18 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
   строках `next_cursor: null`. Успешный BFF-ответ добавляет `request_id` и
   `Cache-Control: no-store`. Пагинация не является снимком обновляемого журнала.
 
+`GET /api/v1/jobs/{id}/result`:
+
+- BFF берёт `job_id` только из GET и проверяет UUID (включая v7); запрос к
+  backend без тела и редиректов. Поиска по `process_id` нет.
+- 200: проверенный публичный документ с `type` (непустая строка), `version: 1`
+  и `data` (объект). Размер исходного тела не больше 1 048 576 байт.
+  BFF выдаёт `job_id`, `result` и `request_id`.
+- 202: только `pending`, `dispatched` или `in_progress`; 404: `job_not_found`;
+  409: `job_failed`; 410: `result_unavailable`. BFF отдаёт фиксированные
+  состояния/коды с `request_id`, без диагностики backend. Неожиданные ответы,
+  некорректные документы и сбои транспорта → 502. Ответ карточки не кэшируется.
+
 ## 5. Разделение ответственности
 
 ### `action.php` (контроллер)
@@ -195,7 +210,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 
 1. Регистрацию хука `AJAX_CALL_UNKNOWN` (наследуя `\dokuwiki\Extension\ActionPlugin`).
 2. Проверку `call == 'plugin_petar'`.
-3. Маршрутизацию по параметру `action` (`readyz`/`jobs` только GET, `submit` только POST,
+3. Маршрутизацию по параметру `action` (`readyz`/`jobs`/`job_result` только GET, `submit` только POST,
    иначе 405 с Allow). `status` и неизвестные действия → 404 без вызова backend.
 4. CSRF: `checkSecurityToken()` для каждого POST → `403` JSON при провале.
 5. ACL: `$INPUT->server->str('REMOTE_USER')` непуст + `$USERINFO['grps']`
@@ -228,7 +243,7 @@ private const ALLOWED_TOOLS = ['yt-dlp', 'fabric', 'echo-test'];
 ### `script.js` / `style.css`
 
 `script.js`: `fetch` к `DOKU_BASE + lib/exe/ajax.php` (`call=plugin_petar`,
-`action=readyz|submit|jobs`), отправка `sectok` только для submit, рендер результата. Полученные
+`action=readyz|submit|jobs|job_result`), отправка `sectok` только для submit, рендер результата. Полученные
 `input_id` и `process_id` сохраняются в DOM-атрибуты контейнера результата:
 `data-input-id` и `data-process-id` (под будущий поллинг `status`).
 `style.css`: только стили, без логики.
@@ -245,6 +260,11 @@ AbortController. Отмена ожидания не гарантирует от�
 статусов, «Обновить» и «Ещё». Смена фильтра/обновление сбрасывают курсор;
 «Ещё» дописывает строки. Счётчик поколения на виджет не даёт старому ответу
 изменить текущие строки, курсор или управление.
+
+У completed/failed есть кнопка карточки. Метаданные берутся из выбранной
+строки, публичный JSON и сообщения выводятся как текст. Закрытие сохраняет
+строки, фильтр и курсор. Новый выбор, закрытие, обновление и смена фильтра
+инвалидируют предыдущий запрос карточки; автоматических повторов нет.
 
 ## 6. Расширяемость (резервы)
 

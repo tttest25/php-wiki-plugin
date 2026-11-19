@@ -41,7 +41,7 @@ final class action_plugin_petar extends ActionPlugin
 
         try {
             $action = $this->stringParam($INPUT, 'action', 'readyz');
-            if (!in_array($action, ['readyz', 'submit', 'jobs'], true)) {
+            if (!in_array($action, ['readyz', 'submit', 'jobs', 'job_result'], true)) {
                 $this->fail('Unknown action', 404);
                 return;
             }
@@ -80,6 +80,14 @@ final class action_plugin_petar extends ActionPlugin
                 $page = $client->listJobs($user, $status, $cursor, $this->requestId);
                 header('Cache-Control: no-store');
                 $this->sendJson($page, 200);
+                return;
+            }
+
+            if ($action === 'job_result') {
+                header('Cache-Control: no-store');
+                $jobId = $this->stringParam($INPUT->get, 'job_id');
+                $result = $client->getJobResult($user, $jobId, $this->requestId);
+                $this->sendJson($result['data'], $result['http_status']);
                 return;
             }
 

@@ -177,6 +177,13 @@
         var table = widget.querySelector('.petar-jobs-table');
         var rows = widget.querySelector('tbody');
         var status = widget.querySelector('.petar-jobs-status');
+        var card = widget.querySelector('.petar-job-card');
+        var close = card.querySelector('.petar-job-close');
+        var cardStatus = card.querySelector('.petar-job-status');
+        var publication = card.querySelector('.petar-job-public');
+        var cardFields = card.querySelectorAll('[data-job-field]');
+        var selection = 0;
+        var opener = null;
         var generation = 0;
         var cursor = null;
         var busy = false;
@@ -189,13 +196,79 @@
             table.setAttribute('aria-busy', busy ? 'true' : 'false');
         }
 
+        function jobText(job, key) {
+            return key === 'status' ? strings[job.status] : job[key];
+        }
+
+        function closeCard(restoreFocus) {
+            ++selection;
+            card.hidden = true;
+            cardStatus.textContent = '';
+            publication.textContent = '';
+            publication.hidden = true;
+            cardFields.forEach(function (field) { field.textContent = ''; });
+            if (opener) {
+                opener.setAttribute('aria-expanded', 'false');
+                if (restoreFocus) opener.focus();
+                opener = null;
+            }
+        }
+
+        async function openCard(job, button) {
+            closeCard(false);
+            var current = selection;
+            opener = button;
+            button.setAttribute('aria-expanded', 'true');
+            cardFields.forEach(function (field) {
+                field.textContent = jobText(job, field.dataset.jobField);
+            });
+            card.hidden = false;
+            cardStatus.textContent = strings.result_loading;
+            close.focus();
+            try {
+                var response = await request('job_result', null, new URLSearchParams({job_id: job.job_id}));
+                if (current !== selection) return;
+                var data = response.data || {};
+                if (response.status === 200 && data.job_id === job.job_id && data.result) {
+                    publication.textContent = JSON.stringify(data.result, null, 2);
+                    publication.hidden = false;
+                    cardStatus.textContent = '';
+                } else if (response.status === 202 && ['pending', 'dispatched', 'in_progress'].includes(data.status)) {
+                    cardStatus.textContent = strings.result_not_ready;
+                } else if (response.status === 409 && data.error === 'job_failed') {
+                    cardStatus.textContent = strings.result_failed;
+                } else if (response.status === 404 && data.error === 'job_not_found') {
+                    cardStatus.textContent = strings.result_missing;
+                } else if (response.status === 410 && data.error === 'result_unavailable') {
+                    cardStatus.textContent = strings.result_unavailable;
+                } else {
+                    cardStatus.textContent = strings.result_error;
+                }
+            } catch (_) {
+                if (current === selection) cardStatus.textContent = strings.result_error;
+            }
+        }
+
         function makeRow(job) {
             var row = document.createElement('tr');
             ['job_id', 'process_id', 'tool', 'status', 'created_at', 'updated_at'].forEach(function (key) {
                 var cell = document.createElement('td');
-                cell.textContent = key === 'status' ? strings[job.status] : job[key];
+                cell.textContent = jobText(job, key);
                 row.appendChild(cell);
             });
+            var action = document.createElement('td');
+            if (job.status === 'completed' || job.status === 'failed') {
+                var button = document.createElement('button');
+                button.setAttribute('type', 'button');
+                button.setAttribute('class', 'button');
+                button.setAttribute('aria-label', strings.result_open + ': ' + job.job_id);
+                button.setAttribute('aria-controls', card.getAttribute('id'));
+                button.setAttribute('aria-expanded', 'false');
+                button.textContent = strings.result_open;
+                button.addEventListener('click', function () { openCard(job, button); });
+                action.appendChild(button);
+            }
+            row.appendChild(action);
             return row;
         }
 
@@ -203,6 +276,7 @@
             if (append && (busy || cursor === null)) return;
             var current = ++generation;
             if (!append) {
+                closeCard(false);
                 cursor = null;
                 rowCount = 0;
                 rows.textContent = '';
@@ -237,6 +311,7 @@
         }
 
         filter.addEventListener('change', function () { load(false); });
+        close.addEventListener('click', function () { closeCard(true); });
         refresh.addEventListener('click', function () { load(false); });
         more.addEventListener('click', function () { load(true); });
         load(false);
