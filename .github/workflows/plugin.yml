@@ -1,0 +1,147 @@
+name: Verify and release DokuWiki plugin
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      release-version: ${{ steps.source.outputs.release-version }}
+      checksum: ${{ steps.bundle.outputs.checksum }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.24.0'
+          cache: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.15.0'
+      - name: Identify and validate source
+        id: source
+        env:
+          CREATED: ${{ github.event.created }}
+          FORCED: ${{ github.event.forced }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_EVENT_NAME == push && $GITHUB_REF_TYPE == tag ]]; then
+            [[ $CREATED == true && $FORCED == false ]]
+            [[ $GITHUB_REF_NAME =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            [[ $(git rev-parse --verify "$GITHUB_REF^{commit}") == "$sha" ]]
+            git merge-base --is-ancestor "$sha" "refs/remotes/origin/$DEFAULT_BRANCH"
+            echo "release-version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check toolchain
+        run: |
+          git --version
+          docker compose version
+          bash --version
+          timeout --version
+          python3 --version
+          go version
+          node --version
+      - name: Check checkout contracts and Chromium
+        run: bash scripts/acceptance.sh
+      - name: Check archive reproducibility and rejection cases
+        run: bash tests/release/package_test.sh
+      - name: Check the exact archive in a fresh DokuWiki
+        id: bundle
+        env:
+          RELEASE_VERSION: ${{ steps.source.outputs.release-version }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          version=${RELEASE_VERSION:-v0.0.0}
+          out="$RUNNER_TEMP/plugin-bundle"
+          mkdir "$out"
+          bash scripts/package-plugin.sh "$SOURCE_SHA" "$version" "$out"
+          bash scripts/check-plugin-release.sh "$out/petar-$version.tar.gz" "$out/SHA256SUMS"
+          read -r checksum _ < "$out/SHA256SUMS"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+      - name: Upload only assets tested above
+        if: steps.source.outputs.release-version != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-plugin-release
+          path: |
+            ${{ runner.temp }}/plugin-bundle/petar-${{ steps.source.outputs.release-version }}.tar.gz
+            ${{ runner.temp }}/plugin-bundle/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.verify.outputs.release-version != ''
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: plugin-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verified-plugin-release
+          path: ${{ runner.temp }}/release
+      - name: Verify assets and publish a new release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.verify.outputs.release-version }}
+          SHA: ${{ needs.verify.outputs.sha }}
+          CHECKSUM: ${{ needs.verify.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          [[ $VERSION == "$GITHUB_REF_NAME" && $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ $SHA =~ ^[0-9a-f]{40}$ && $CHECKSUM =~ ^[0-9a-f]{64}$ ]]
+          cd "$RUNNER_TEMP/release"
+          archive="petar-$VERSION.tar.gz"
+          [[ $(find . -mindepth 1 | wc -l) == 2 && -f $archive && -f SHA256SUMS ]]
+          printf '%s  %s\n' "$CHECKSUM" "$archive" | cmp - SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+
+          # With contents: write this list includes drafts. Fail closed if
+          # the request fails; never replace an existing release or draft.
+          existing=$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[].tag_name')
+          if grep -Fxq "$VERSION" <<< "$existing"; then
+            echo "Release or draft already exists for $VERSION" >&2
+            exit 1
+          fi
+          # Use the authenticated API and peel annotated tags to the commit.
+          remote=$(gh api "repos/$GH_REPO/git/ref/tags/$VERSION" --jq '.object')
+          for ((depth = 0; depth < 16; depth++)); do
+            object_sha=$(jq -er '.sha | select(test("^[0-9a-f]{40}$"))' <<< "$remote")
+            object_type=$(jq -er '.type' <<< "$remote")
+            if [[ $object_type == commit ]]; then
+              break
+            fi
+            [[ $object_type == tag ]]
+            remote=$(gh api "repos/$GH_REPO/git/tags/$object_sha" --jq '.object')
+          done
+          [[ $object_type == commit && $SHA == "$object_sha" ]]
+          gh release create "$VERSION" --verify-tag --draft --title "Petar $VERSION" \
+            --notes "Source commit: $SHA. Verify the plugin archive with SHA256SUMS." \
+            "$archive" SHA256SUMS
+          gh release view "$VERSION" --json isDraft,assets |
+            jq -e --arg archive "$archive" \
+              '.isDraft and ([.assets[].name] | sort == ["SHA256SUMS", $archive])'
+          download=$(mktemp -d)
+          gh release download "$VERSION" --dir "$download" --pattern "$archive" --pattern SHA256SUMS
+          cmp SHA256SUMS "$download/SHA256SUMS"
+          cmp "$archive" "$download/$archive"
+          gh release edit "$VERSION" --draft=false

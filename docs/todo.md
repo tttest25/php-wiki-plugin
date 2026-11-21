@@ -342,3 +342,9 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
   `docs/todo.md`, `.opencode/tasks/php_07_result_presentations.md`.
   **Проверки:** `TestJobResultPresentations` RED → GREEN (три итерации), quality gate, fixture Chromium, отдельный Chromium E2E на T27 `f726cc4d2a28082f5c4add354c7f70bbbf4eb845` и независимый review — PASS. Human Sign-off получен.
   **Коммит:** `feat: render typed public results with JSON fallback`.
+
+## Подготовка выпуска плагина
+
+- [x] **DEPLOY-04: Подготовка выпуска PHP-плагина.** Из одного SHA собирается архив `petar`; проверка SHA-256 и Chromium на чистой DokuWiki с распакованным read-only плагином проходят. План: [04_php_plugin_release.md](../.opencode/tasks/04_php_plugin_release.md).
+  **Файлы:** `.github/workflows/plugin.yml`, `scripts/{acceptance.sh,package-plugin.sh,check-plugin-release.sh,plugin-release.py}`, `tests/release/package_test.sh`, `docs/{plugin-release,todo}.md`, `.opencode/tasks/04_php_plugin_release.md`.
+  **Коммит:** `ci: verify and package DokuWiki plugin releases`.

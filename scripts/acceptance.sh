@@ -2,22 +2,36 @@
 set -euo pipefail
 umask 077
 
-case $#:$* in
-    0:) contracts_only=false ;;
-    1:--contracts-only) contracts_only=true ;;
-    *) printf 'Usage: %s [--contracts-only]\n' "$0" >&2; exit 2 ;;
-esac
+contracts_only=false
+packaged_plugin=
+if [[ $# == 1 && $1 == --contracts-only ]]; then
+    contracts_only=true
+elif [[ $# == 2 && $1 == --packaged-plugin && -n $2 ]]; then
+    packaged_plugin=$(cd -- "$2" && pwd -P)
+elif (( $# != 0 )); then
+    printf 'Usage: %s [--contracts-only | --packaged-plugin DIRECTORY]\n' "$0" >&2
+    exit 2
+fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-PETAR_ACCEPTANCE_CHECKOUT=$(pwd -P)
-PETAR_ACCEPTANCE_UID=$(stat -c %u .)
-PETAR_ACCEPTANCE_GID=$(stat -c %g .)
+checkout=$(pwd -P)
+if [[ -n $packaged_plugin ]]; then
+    if [[ $packaged_plugin/ == "$checkout/"* || -e $packaged_plugin/.git ||
+          ! -f $packaged_plugin/plugin.info.txt ]]; then
+        printf 'Packaged plugin must be outside the harness and is not a checkout\n' >&2
+        exit 1
+    fi
+fi
+# This Compose variable is the source of the plugin bind mount in both modes.
+PETAR_ACCEPTANCE_CHECKOUT=${packaged_plugin:-"$checkout"}
+PETAR_ACCEPTANCE_UID=$(stat -c %u "$PETAR_ACCEPTANCE_CHECKOUT")
+PETAR_ACCEPTANCE_GID=$(stat -c %g "$PETAR_ACCEPTANCE_CHECKOUT")
 PETAR_ACCEPTANCE_PASSWORD=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
 [[ ${#PETAR_ACCEPTANCE_PASSWORD} == 48 ]]
 export PETAR_ACCEPTANCE_CHECKOUT PETAR_ACCEPTANCE_UID PETAR_ACCEPTANCE_GID PETAR_ACCEPTANCE_PASSWORD
 
 tmp_root=$(cd -- "${TMPDIR:-/tmp}" && pwd -P)
-if [[ "$tmp_root/" == "$PETAR_ACCEPTANCE_CHECKOUT/"* ]]; then
+if [[ "$tmp_root/" == "$checkout/"* || "$tmp_root/" == "$PETAR_ACCEPTANCE_CHECKOUT/"* ]]; then
     printf 'TMPDIR must be outside the checkout\n' >&2
     exit 1
 fi
@@ -54,6 +68,8 @@ finish() {
     if (( rc == 0 )); then
         if "$contracts_only"; then
             printf 'CONTRACTS-ONLY PASSED (%s)\n' "$project"
+        elif [[ -n $packaged_plugin ]]; then
+            printf 'PACKAGED PLUGIN ACCEPTANCE PASSED (%s)\n' "$project"
         else
             printf 'ACCEPTANCE PASSED (%s)\n' "$project"
         fi
@@ -94,14 +110,20 @@ fi
 export PETAR_TEST_WIKI_CONTAINER
 printf 'Wiki container: %s\n' "$PETAR_TEST_WIKI_CONTAINER"
 stage=wiki-mount
-readonly_mount=$(timeout -k 5s 15s docker inspect --type container --format \
-    '{{range .Mounts}}{{if eq .Destination "/config/dokuwiki/lib/plugins/petar"}}{{not .RW}}{{end}}{{end}}' \
+plugin_mount=$(timeout -k 5s 15s docker inspect --type container --format \
+    '{{range .Mounts}}{{if eq .Destination "/config/dokuwiki/lib/plugins/petar"}}{{.Type}} {{.RW}} {{.Source}}{{end}}{{end}}' \
     "$PETAR_TEST_WIKI_CONTAINER")
-if [[ $readonly_mount != true ]]; then
-    printf 'Wiki checkout mount must be read-only\n' >&2
+if [[ $plugin_mount != 'bind false '* || ! ${plugin_mount#bind false } -ef $PETAR_ACCEPTANCE_CHECKOUT ]]; then
+    printf 'Wiki plugin mount must bind the selected source read-only\n' >&2
     exit 1
 fi
-run_stage contracts 180s ./scripts/quality-gate.sh
+printf 'Read-only plugin mount: %s\n' "${plugin_mount#bind false }"
+if [[ -z $packaged_plugin ]]; then
+    run_stage contracts 180s ./scripts/quality-gate.sh
+fi
 if ! "$contracts_only"; then
-    run_stage chromium 60s "${compose[@]}" run --rm --no-deps -T browser
+    # Require the fixture test explicitly; the real-backend drill is separate.
+    run_stage chromium 60s "${compose[@]}" run --rm --no-deps -T browser \
+        ./node_modules/.bin/playwright test --grep \
+        'ai sees ready form, journal and selected job results on one page'
 fi
