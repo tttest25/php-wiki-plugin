@@ -37,6 +37,7 @@ mkdir "$tmp/unpacked"
 python3 scripts/plugin-release.py verify "$tmp/a/$asset" "$tmp/a/SHA256SUMS" "$tmp/unpacked"
 
 python3 - "$tmp/a/$asset" "$tmp/checkout" "$tmp/unpacked" <<'PY'
+import gzip
 from pathlib import Path
 import subprocess
 import sys
@@ -49,6 +50,8 @@ expected = {
     'lang/ru/settings.php',
 }
 unpacked = Path(sys.argv[3])
+with gzip.open(sys.argv[1], 'rb') as raw:
+    plain = raw.read()
 assert {path.relative_to(unpacked).as_posix() for path in unpacked.rglob('*') if path.is_file()} == {
     'petar/' + name for name in expected
 }
@@ -59,15 +62,17 @@ with tarfile.open(sys.argv[1], 'r:gz') as archive:
         git = ['git', '-C', sys.argv[2]]
         mode = subprocess.check_output([*git, 'ls-tree', 'HEAD', '--', name]).split()[0]
         assert item.isfile() and item.mode == (int(mode, 8) & 0o777)
+        assert plain[item.offset + 329:item.offset + 345] == b'\0' * 16, 'noncanonical USTAR device fields'
         data = subprocess.check_output([*git, 'show', f'HEAD:{name}'])
         assert archive.extractfile(item).read() == data
         assert (unpacked / item.name).read_bytes() == data
         assert (unpacked / item.name).stat().st_mode & 0o777 == item.mode
 PY
 
-for case in missing extra symlink traversal duplicate mode corrupt wrong-name; do
+for case in missing extra symlink traversal duplicate mode device-fields corrupt wrong-name; do
     mkdir "$tmp/$case"
     python3 - "$tmp" "$asset" "$case" <<'PY'
+import gzip
 import hashlib
 import io
 from pathlib import Path
@@ -79,6 +84,12 @@ source = root / 'a' / asset
 target = root / case / asset
 if case in {'corrupt', 'wrong-name'}:
     target.write_bytes(source.read_bytes() + (b'!' if case == 'corrupt' else b''))
+elif case == 'device-fields':
+    plain = bytearray(gzip.decompress(source.read_bytes()))
+    plain[329:345] = b'0000001\0' + b'0000000\0'
+    plain[148:156] = b' ' * 8
+    plain[148:156] = f'{sum(plain[:512]):06o}\0 '.encode('ascii')
+    target.write_bytes(gzip.compress(plain))
 else:
     with tarfile.open(source, 'r:gz') as src, tarfile.open(target, 'w:gz') as dest:
         for member in src:

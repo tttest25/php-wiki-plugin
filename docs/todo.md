@@ -348,3 +348,9 @@ smoke остаётся отдельной проверкой. PHP-04 и код �
 - [x] **DEPLOY-04: Подготовка выпуска PHP-плагина.** Из одного SHA собирается архив `petar`; проверка SHA-256 и Chromium на чистой DokuWiki с распакованным read-only плагином проходят. План: [04_php_plugin_release.md](../.opencode/tasks/04_php_plugin_release.md).
   **Файлы:** `.github/workflows/plugin.yml`, `scripts/{acceptance.sh,package-plugin.sh,check-plugin-release.sh,plugin-release.py}`, `tests/release/package_test.sh`, `docs/{plugin-release,todo}.md`, `.opencode/tasks/04_php_plugin_release.md`.
   **Коммит:** `ci: verify and package DokuWiki plugin releases`.
+
+### Исправление совместимости архива для DEPLOY-04
+
+- [x] **Совместимый формат архива `v0.1.1`.** Архив и проверка используют одинаковые заголовки USTAR на Python 3.8 и 3.12; опубликованный `v0.1.0` не изменяется.
+  **Файлы:** `scripts/plugin-release.py`, `tests/release/package_test.sh`, `docs/{plugin-release,todo}.md`.
+  **Коммит:** `fix: stabilize plugin release tar headers across Python versions`.

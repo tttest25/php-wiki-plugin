@@ -42,6 +42,9 @@ The first acceptance uses the source checkout; the second uses only the
 validated archive as the wiki's plugin. Both use disposable Compose
 projects with no published ports. `--verify-only` checks the checksum and
 archive format without Docker; it does not replace browser acceptance.
+Use the verifier from `v0.1.1` or later on Python 3.8. The `v0.1.0`
+verifier depended on Python's USTAR header defaults; the updated
+verifier can also check the original published `v0.1.0` archive.
 To repeat the published archive smoke without a checkout, copy
 `scripts/{check-plugin-release.sh,plugin-release.py,acceptance.sh}` and
 `tests/acceptance/` from the tested source into a separate harness directory,

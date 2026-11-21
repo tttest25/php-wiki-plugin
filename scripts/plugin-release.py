@@ -64,11 +64,21 @@ def build(commit, version, out):
 
 def tar_bytes(contents):
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-        for name, data in sorted(contents.items()):
-            item = tarfile.TarInfo(name)
-            item.mode, item.size = 0o644, len(data)
-            archive.addfile(item, io.BytesIO(data))
+    for name, data in sorted(contents.items()):
+        item = tarfile.TarInfo(name)
+        item.mode, item.size = 0o644, len(data)
+        header = bytearray(item.tobuf(tarfile.USTAR_FORMAT))
+        # Device numbers do not apply to regular files. Older Python writes
+        # octal zeros there, newer Python leaves the fields NUL-filled.
+        header[329:345] = b"\0" * 16
+        header[148:156] = b" " * 8
+        header[148:156] = f"{sum(header):06o}\0 ".encode("ascii")
+        buffer.write(header)
+        buffer.write(data)
+        buffer.write(b"\0" * (-len(data) % tarfile.BLOCKSIZE))
+    # Two end-of-archive blocks, then pad to a complete tar record.
+    buffer.write(b"\0" * (2 * tarfile.BLOCKSIZE))
+    buffer.write(b"\0" * (-buffer.tell() % tarfile.RECORDSIZE))
     return buffer.getvalue()
 
 
